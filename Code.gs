@@ -24,18 +24,6 @@ const HOJA_REPORTE_HOY = "Reporte Hoy";
 // Zona horaria para cálculos de fecha
 const TIMEZONE = "America/Santiago";
 
-// Datos de inventario de prueba
-// Cada objeto representa: producto base, unidad y cantidad (inventario hoy)
-const INVENTARIO_PRUEBA = [
-  { producto: 'frutilla', unidad: 'Kilo', cantidad: 2 },
-  { producto: 'kiwi', unidad: 'Kilo', cantidad: 16 },
-  { producto: 'limon', unidad: 'Kilo', cantidad: 40 },
-  { producto: 'limon sutil', unidad: 'Kilo', cantidad: 17 },
-  { producto: 'mango', unidad: 'Kilo', cantidad: 1 },
-  { producto: 'Zapallo Cubo PREELABORADO', unidad: 'Envase', cantidad: 2 },
-  { producto: 'Carbonada PREELABORADO', unidad: 'kilo', cantidad: 2 }
-];
-
 // =====================================================================================
 // FUNCIONES DE AUTOMATIZACIÓN Y MENÚ
 // =====================================================================================
@@ -50,11 +38,10 @@ function onOpen() {
       .addItem('Abrir Dashboard', 'showDashboard')
       .addSeparator()
       .addItem('1. Configurar Hojas y Fórmulas', 'setup')
-      .addItem('2. Generar Inventario Histórico Automático', 'generarInventarioHistoricoAutomatico')
       .addSeparator()
-      .addItem('3. Calcular Inventario de Hoy (Manual)', 'calcularInventarioDiario')
+      .addItem('2. Calcular Inventario de Hoy (Manual)', 'calcularInventarioDiario')
       .addSeparator()
-      .addItem('4. Activar/Actualizar Trigger Diario', 'crearDisparadorDiario')
+      .addItem('3. Activar/Actualizar Trigger Diario', 'crearDisparadorDiario')
       .addToUi();
 }
 
@@ -138,45 +125,6 @@ function crearDisparadorDiario() {
 
   // 3. Notificar al usuario
   SpreadsheetApp.getUi().alert(`¡Disparador configurado! La función '${nombreFuncion}' se ejecutará automáticamente todos los días entre las 2:00 y 3:00 AM (hora de Chile).`);
-}
-
-/**
- * Genera entradas de inventario histórico basadas en INVENTARIO_PRUEBA.
- * Asigna fechas consecutivas hacia atrás desde hoy para cada producto.
- */
-function generarInventarioHistoricoAutomatico() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const hojaHistorico = ss.getSheetByName(HOJA_HISTORICO); // Reutiliza tu constante HOJA_HISTORICO
-  if (!hojaHistorico) {
-    SpreadsheetApp.getUi().alert('No existe la hoja "' + HOJA_HISTORICO + '".');
-    return;
-  }
-
-  // Calcular una fecha distinta para cada producto, restando i días al día actual
-  const baseDate = new Date();
-  baseDate.setHours(0, 0, 0, 0); // Hora cero
-  const timezone = TIMEZONE || Session.getScriptTimeZone();
-
-  const filas = INVENTARIO_PRUEBA.map((item, index) => {
-    // Restar index días a la fecha base
-    const fecha = new Date(baseDate);
-    fecha.setDate(fecha.getDate() - index);
-    const timestamp = Utilities.formatDate(fecha, timezone, 'yyyy-MM-dd\'T\'HH:mm:ss');
-
-    return [
-      timestamp,           // Timestamp
-      item.producto,       // Producto Base
-      item.cantidad,       // Cantidad inventariada (Stock Real)
-      '',                  // Stock Real (vacío por ahora)
-      item.unidad          // Unidad de venta
-    ];
-  });
-
-  // Insertar las filas en la hoja, a partir de la primera fila libre
-  const startRow = hojaHistorico.getLastRow() + 1;
-  hojaHistorico.getRange(startRow, 1, filas.length, 5).setValues(filas);
-
-  SpreadsheetApp.getUi().alert('Inventario histórico de prueba cargado correctamente.');
 }
 
 // =====================================================================================
@@ -394,12 +342,13 @@ function doGet(e) {
 }
 
 /**
- * Lanza el dashboard en una barra lateral en la hoja de cálculo.
+ * Lanza el dashboard en un diálogo modal (ventana emergente).
  */
 function showDashboard() {
   const html = HtmlService.createHtmlOutputFromFile('dashboard')
-      .setTitle('Dashboard de Inventario');
-  SpreadsheetApp.getUi().showSidebar(html);
+      .setWidth(1200)
+      .setHeight(700);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Dashboard de Inventario');
 }
 
 /**
@@ -411,87 +360,59 @@ function getDashboardData() {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const hojaReporte = ss.getSheetByName(HOJA_REPORTE_HOY);
-    const hojaOrders = ss.getSheetByName(HOJA_ORDERS);
-    const hojaAdquisiciones = ss.getSheetByName(HOJA_ADQUISICIONES);
     const hojaSku = ss.getSheetByName(HOJA_SKU);
+    const hojaDiscrepancias = ss.getSheetByName("Discrepancias");
 
-    // --- 1. OBTENER MAPA SKU PARA UNIDADES Y CONVERSIONES ---
+    // --- 1. OBTENER MAPA DE UNIDADES ---
     const datosSku = hojaSku.getRange("A2:K" + hojaSku.getLastRow()).getValues();
-    const mapaVentaSku = new Map();
-    datosSku.forEach(fila => {
-      const [nombreProducto, productoBase, , , , , , unidadVenta] = fila;
-      if (nombreProducto && productoBase) {
-        mapaVentaSku.set(nombreProducto, { productoBase, unidadVenta });
-      }
-    });
-
     const mapaUnidades = new Map();
-     datosSku.forEach(fila => {
+    datosSku.forEach(fila => {
       const [, productoBase, , , , , , unidadVenta] = fila;
       if (productoBase && unidadVenta && !mapaUnidades.has(productoBase)) {
         mapaUnidades.set(productoBase, unidadVenta);
       }
     });
 
-
     // --- 2. OBTENER INVENTARIO ACTUAL ---
-    const datosInventario = hojaReporte.getLastRow() > 1 ? hojaReporte.getRange("A2:E" + hojaReporte.getLastRow()).getValues() : [];
-    const inventory = datosInventario.map(fila => ({
+    const datosInventario = hojaReporte.getLastRow() > 1 ? hojaReporte.getRange("A2:F" + hojaReporte.getLastRow()).getValues() : [];
+    const allInventory = datosInventario.map(fila => ({
       productoBase: fila[0],
-      inventarioAyer: fila[1],
-      compras: fila[2],
-      ventas: fila[3],
-      inventarioHoy: fila[4],
+      inventarioAyer: parseFloat(fila[1]) || 0,
+      compras: parseFloat(fila[2]) || 0,
+      ventas: parseFloat(fila[3]) || 0,
+      inventarioHoy: parseFloat(fila[4]) || 0,
+      stockReal: fila[5] ? parseFloat(fila[5]) : null,
       unidad: mapaUnidades.get(fila[0]) || 'N/A'
     }));
 
-    // --- 3. OBTENER VENTAS DE HOY ---
-    const datosOrders = hojaOrders.getLastRow() > 1 ? hojaOrders.getRange("A2:K" + hojaOrders.getLastRow()).getValues() : [];
-    const sales = [];
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-
-    datosOrders.forEach(fila => {
-      const fechaPedido = new Date(fila[8]); // Columna I: Fecha
-      if (fechaPedido >= hoy) {
-        const nombreProductoVendido = fila[9]; // Columna J: Nombre Producto
-        const skuInfo = mapaVentaSku.get(nombreProductoVendido);
-        sales.push({
-          pedido: fila[0], // Columna A: Order Number
-          cliente: fila[2], // Columna C: Billing Name
-          productoVendido: nombreProductoVendido,
-          productoBase: skuInfo ? skuInfo.productoBase : 'No Encontrado',
-          cantidad: fila[10] // Columna K: Cantidad
-        });
-      }
+    // --- 3. FILTRAR PRODUCTOS RELEVANTES ---
+    const relevantInventory = allInventory.filter(item => {
+      const hasMovement = item.compras > 0 || item.ventas > 0;
+      const isLowStock = item.inventarioHoy <= 5; // Umbral de stock bajo
+      // Consideramos relevante si tiene movimiento, es stock bajo o tiene stock positivo
+      return hasMovement || isLowStock || item.inventarioHoy > 0;
     });
 
-    // --- 4. OBTENER ADQUISICIONES DE HOY ---
-    // Nota: Asumimos que todas las adquisiciones listadas son para el día.
-    const datosAdquisiciones = hojaAdquisiciones.getLastRow() > 1 ? hojaAdquisiciones.getRange("A2:D" + hojaAdquisiciones.getLastRow()).getValues() : [];
-    const acquisitions = datosAdquisiciones.map(fila => ({
-      productoBase: fila[1], // Columna B: Producto Base
-      formato: fila[2],      // Columna C: Formato de Compra
-      cantidad: fila[3]      // Columna D: Cantidad a Comprar
-    }));
+    // --- 4. CALCULAR KPIs ---
+    const datosDiscrepancias = hojaDiscrepancias.getLastRow() > 1 ? hojaDiscrepancias.getRange("A2:E" + hojaDiscrepancias.getLastRow()).getValues() : [];
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    const discrepanciasHoy = datosDiscrepancias.filter(d => new Date(d[0]) >= hoy).length;
 
-    // --- 5. CALCULAR KPIs ---
     const kpis = {
-      totalProducts: inventory.length,
-      lowStock: inventory.filter(p => p.inventarioHoy <= 0).length,
-      discrepancies: 0 // Se implementará en el futuro
+      totalToInventory: relevantInventory.length,
+      lowStockCount: allInventory.filter(p => p.inventarioHoy <= 5 && p.inventarioHoy > 0).length,
+      discrepanciesCount: discrepanciasHoy,
     };
 
+    // --- 5. RETORNAR DATOS PARA EL DASHBOARD ---
     return {
-      inventory: inventory,
-      sales: sales.reverse(), // Mostrar las más recientes primero
-      acquisitions: acquisitions,
+      inventory: relevantInventory,
       kpis: kpis
     };
 
   } catch (e) {
     Logger.log(e);
-    // Devolver un error estructurado al cliente
     return { error: e.message, stack: e.stack };
   }
 }
