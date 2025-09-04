@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; }
+      .container { padding: 15px; }
+      .kpi-container { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; }
+      .kpi-card { border: 1px solid #ccc; padding: 10px; border-radius: 8px; text-align: center; flex-grow: 1; }
+      .kpi-card h4 { margin: 0 0 5px 0; }
+      .tabs { border-bottom: 1px solid #ccc; }
+      .tab-button { background-color: #f1f1f1; border: none; padding: 10px 15px; cursor: pointer; border-radius: 5px 5px 0 0; }
+      .tab-button.active { background-color: #ddd; }
+      .tab-content { display: none; padding-top: 15px; }
+      .tab-content.active { display: block; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+      th { background-color: #f2f2f2; }
+      button { padding: 8px 12px; cursor: pointer; border-radius: 5px; border: 1px solid #ccc; }
+      .actions { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
+      #inventory-filter { padding: 8px; border-radius: 5px; border: 1px solid #ccc; }
+
+      /* Styling for low stock */
+      .low-stock { background-color: #ffebee; } /* Light red */
+      .negative-stock { background-color: #ffcdd2; font-weight: bold; } /* Red */
+
+      /* Modal Styles */
+      .modal { display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.4); }
+      .modal-content { background-color: #fefefe; margin: 5% auto; padding: 20px; border: 1px solid #888; width: 80%; max-width: 600px; border-radius: 8px; }
+      .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 15px; }
+      .modal-header h2 { margin: 0; }
+      .close-button { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
+      .modal-body table { width: 100%; }
+      .modal-body input { width: 95%; padding: 5px; }
+      .modal-footer { text-align: right; border-top: 1px solid #ccc; padding-top: 15px; margin-top: 15px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Dashboard de Inventario</h2>
+
+      <div class="actions">
+        <button id="update-data">Actualizar Datos</button>
+        <button id="register-real">Registrar Inventario Real</button>
+        <input type="text" id="inventory-filter" placeholder="Filtrar por producto...">
+      </div>
+
+      <div class="kpi-container">
+        <div class="kpi-card" id="kpi-total-products"><h4>Total Productos</h4><p>...</p></div>
+        <div class="kpi-card" id="kpi-low-stock"><h4>Stock Bajo</h4><p>...</p></div>
+        <div class="kpi-card" id="kpi-discrepancies"><h4>Discrepancias</h4><p>...</p></div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-button active" onclick="openTab(event, 'inventario')">Inventario</button>
+        <button class="tab-button" onclick="openTab(event, 'ventas')">Ventas de Hoy</button>
+        <button class="tab-button" onclick="openTab(event, 'adquisiciones')">Adquisiciones de Hoy</button>
+      </div>
+
+      <div id="inventario" class="tab-content active">
+        <table id="inventory-table">
+          <thead><tr><th>Producto Base</th><th>Inv. Ayer</th><th>Compras</th><th>Ventas</th><th>Inv. Estimado</th><th>Inv. Real</th><th>Unidad</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="ventas" class="tab-content">
+        <table id="sales-table">
+          <thead><tr><th>N° Pedido</th><th>Cliente</th><th>Producto Vendido</th><th>Producto Base</th><th>Cantidad</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="adquisiciones" class="tab-content">
+        <table id="acquisitions-table">
+          <thead><tr><th>Producto Base</th><th>Formato</th><th>Cantidad</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Real Inventory Modal -->
+    <div id="real-inventory-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header"><h2>Registrar Inventario Real</h2><span class="close-button">&times;</span></div>
+        <div class="modal-body"><form id="real-inventory-form"><table><thead><tr><th>Producto Base</th><th>Cantidad Real</th></tr></thead><tbody id="real-inventory-tbody"></tbody></table></form></div>
+        <div class="modal-footer"><button id="cancel-real-inventory">Cancelar</button><button id="save-real-inventory">Guardar</button></div>
+      </div>
+    </div>
+
+    <script>
+      let currentInventoryData = [];
+
+      function openTab(evt, tabName) {
+        var i, tabcontent, tablinks;
+        tabcontent = document.getElementsByClassName("tab-content");
+        for (i = 0; i < tabcontent.length; i++) { tabcontent[i].style.display = "none"; }
+        tablinks = document.getElementsByClassName("tab-button");
+        for (i = 0; i < tablinks.length; i++) { tablinks[i].className = tablinks[i].className.replace(" active", ""); }
+        document.getElementById(tabName).style.display = "block";
+        evt.currentTarget.className += " active";
+      }
+
+      function fetchData() {
+        setLoadingState(true, "update-data", "Cargando...");
+        google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleError).getDashboardData();
+      }
+
+      function handleSuccess(data) {
+        if (data.error) { handleError(data); return; }
+        currentInventoryData = data.inventory || [];
+        renderKpis(data.kpis);
+        renderInventory(currentInventoryData);
+        renderSales(data.sales);
+        renderAcquisitions(data.acquisitions);
+        filterInventory(); // Apply filter to new data
+        setLoadingState(false, "update-data", "Actualizar Datos");
+      }
+
+      function handleError(error) {
+        console.error("Error:", error);
+        alert("Ocurrió un error: " + error.message);
+        setLoadingState(false, "update-data", "Actualizar Datos");
+        setLoadingState(false, "save-real-inventory", "Guardar");
+      }
+
+      function setLoadingState(isLoading, buttonId, loadingText) {
+          const button = document.getElementById(buttonId);
+          if(button) {
+            button.disabled = isLoading;
+            button.textContent = isLoading ? loadingText : button.dataset.originalText;
+          }
+      }
+
+      function renderKpis(kpis) {
+        document.querySelector("#kpi-total-products p").textContent = kpis.totalProducts;
+        document.querySelector("#kpi-low-stock p").textContent = kpis.lowStock;
+        document.querySelector("#kpi-discrepancies p").textContent = kpis.discrepancies || 0;
+      }
+
+      function renderInventory(inventory) {
+        const tbody = document.querySelector("#inventory-table tbody");
+        tbody.innerHTML = "";
+        inventory.forEach(item => {
+          const realStock = item.stockReal ? `<strong>${parseFloat(item.stockReal).toFixed(2)}</strong>` : '-';
+          const stockClass = item.inventarioHoy < 0 ? 'negative-stock' : (item.inventarioHoy <= 5 ? 'low-stock' : ''); // Using 5 as low stock threshold
+          const row = `<tr class="${stockClass}">
+            <td>${item.productoBase}</td>
+            <td>${parseFloat(item.inventarioAyer).toFixed(2)}</td>
+            <td>${parseFloat(item.compras).toFixed(2)}</td>
+            <td>${parseFloat(item.ventas).toFixed(2)}</td>
+            <td><strong>${parseFloat(item.inventarioHoy).toFixed(2)}</strong></td>
+            <td>${realStock}</td>
+            <td>${item.unidad}</td>
+          </tr>`;
+          tbody.innerHTML += row;
+        });
+      }
+
+      function renderSales(sales) { /* ... same as before ... */ }
+      function renderAcquisitions(acquisitions) { /* ... same as before ... */ }
+      // For brevity, keeping these functions collapsed as they are unchanged
+      function renderSales(sales){const t=document.querySelector("#sales-table tbody");t.innerHTML="",sales.forEach(e=>{t.innerHTML+=`<tr><td>${e.pedido}</td><td>${e.cliente}</td><td>${e.productoVendido}</td><td>${e.productoBase}</td><td>${e.cantidad}</td></tr>`})}
+      function renderAcquisitions(acquisitions){const t=document.querySelector("#acquisitions-table tbody");t.innerHTML="",acquisitions.forEach(e=>{t.innerHTML+=`<tr><td>${e.productoBase}</td><td>${e.formato}</td><td>${e.cantidad}</td></tr>`})}
+
+
+      function filterInventory() {
+        const filter = document.getElementById("inventory-filter").value.toLowerCase();
+        const rows = document.querySelectorAll("#inventory-table tbody tr");
+        rows.forEach(row => {
+          const productName = row.cells[0].textContent.toLowerCase();
+          row.style.display = productName.includes(filter) ? "" : "none";
+        });
+      }
+
+      // --- Modal Logic ---
+      const modal = document.getElementById("real-inventory-modal");
+      const openModalBtn = document.getElementById("register-real");
+      const closeModalSpans = [document.querySelector(".close-button"), document.getElementById("cancel-real-inventory")];
+      const saveModalBtn = document.getElementById("save-real-inventory");
+
+      openModalBtn.onclick = function() { populateRealInventoryForm(); modal.style.display = "block"; }
+      closeModalSpans.forEach(span => span.onclick = function() { modal.style.display = "none"; });
+      window.onclick = function(event) { if (event.target == modal) { modal.style.display = "none"; } }
+
+      function populateRealInventoryForm() { /* ... same as before ... */ }
+      saveModalBtn.onclick = function() { /* ... same as before ... */ }
+      function saveSuccess(response) { /* ... same as before ... */ }
+      // Collapsed for brevity
+      function populateRealInventoryForm(){const t=document.getElementById("real-inventory-tbody");t.innerHTML="",currentInventoryData.forEach(e=>{t.innerHTML+=`<tr><td>${e.productoBase}</td><td><input type="number" step="any" data-product="${e.productoBase}" value="${parseFloat(e.inventarioHoy).toFixed(2)}"></td></tr>`})}
+      saveModalBtn.onclick=function(){const t=document.querySelectorAll("#real-inventory-tbody input"),e=[];t.forEach(t=>{""!==t.value&&e.push({productoBase:t.dataset.product,cantidad:t.value})}),e.length>0?(setLoadingState(!0,"save-real-inventory","Guardando..."),google.script.run.withSuccessHandler(saveSuccess).withFailureHandler(handleError).saveRealInventory(e)):modal.style.display="none"};
+      function saveSuccess(t){setLoadingState(!1,"save-real-inventory","Guardar"),t.success?(modal.style.display="none",fetchData()):handleError(t)}
+
+
+      // --- INITIALIZATION ---
+      document.addEventListener("DOMContentLoaded", function() {
+          document.querySelectorAll('button').forEach(b => { b.dataset.originalText = b.textContent; });
+          fetchData();
+          document.getElementById("inventory-filter").addEventListener("keyup", filterInventory);
+      });
+    </script>
+  </body>
+</html>
