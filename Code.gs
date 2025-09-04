@@ -24,6 +24,18 @@ const HOJA_REPORTE_HOY = "Reporte Hoy";
 // Zona horaria para cálculos de fecha
 const TIMEZONE = "America/Santiago";
 
+// Datos de inventario de prueba
+// Cada objeto representa: producto base, unidad y cantidad (inventario hoy)
+const INVENTARIO_PRUEBA = [
+  { producto: 'frutilla', unidad: 'Kilo', cantidad: 2 },
+  { producto: 'kiwi', unidad: 'Kilo', cantidad: 16 },
+  { producto: 'limon', unidad: 'Kilo', cantidad: 40 },
+  { producto: 'limon sutil', unidad: 'Kilo', cantidad: 17 },
+  { producto: 'mango', unidad: 'Kilo', cantidad: 1 },
+  { producto: 'Zapallo Cubo PREELABORADO', unidad: 'Envase', cantidad: 2 },
+  { producto: 'Carbonada PREELABORADO', unidad: 'kilo', cantidad: 2 }
+];
+
 // =====================================================================================
 // FUNCIONES DE AUTOMATIZACIÓN Y MENÚ
 // =====================================================================================
@@ -38,10 +50,11 @@ function onOpen() {
       .addItem('Abrir Dashboard', 'showDashboard')
       .addSeparator()
       .addItem('1. Configurar Hojas y Fórmulas', 'setup')
+      .addItem('2. Generar Inventario Histórico Automático', 'generarInventarioHistoricoAutomatico')
       .addSeparator()
-      .addItem('2. Calcular Inventario de Hoy (Manual)', 'calcularInventarioDiario')
+      .addItem('3. Calcular Inventario de Hoy (Manual)', 'calcularInventarioDiario')
       .addSeparator()
-      .addItem('3. Activar/Actualizar Trigger Diario', 'crearDisparadorDiario')
+      .addItem('4. Activar/Actualizar Trigger Diario', 'crearDisparadorDiario')
       .addToUi();
 }
 
@@ -125,6 +138,45 @@ function crearDisparadorDiario() {
 
   // 3. Notificar al usuario
   SpreadsheetApp.getUi().alert(`¡Disparador configurado! La función '${nombreFuncion}' se ejecutará automáticamente todos los días entre las 2:00 y 3:00 AM (hora de Chile).`);
+}
+
+/**
+ * Genera entradas de inventario histórico basadas en INVENTARIO_PRUEBA.
+ * Asigna fechas consecutivas hacia atrás desde hoy para cada producto.
+ */
+function generarInventarioHistoricoAutomatico() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const hojaHistorico = ss.getSheetByName(HOJA_HISTORICO); // Reutiliza tu constante HOJA_HISTORICO
+  if (!hojaHistorico) {
+    SpreadsheetApp.getUi().alert('No existe la hoja "' + HOJA_HISTORICO + '".');
+    return;
+  }
+
+  // Calcular una fecha distinta para cada producto, restando i días al día actual
+  const baseDate = new Date();
+  baseDate.setHours(0, 0, 0, 0); // Hora cero
+  const timezone = TIMEZONE || Session.getScriptTimeZone();
+
+  const filas = INVENTARIO_PRUEBA.map((item, index) => {
+    // Restar index días a la fecha base
+    const fecha = new Date(baseDate);
+    fecha.setDate(fecha.getDate() - index);
+    const timestamp = Utilities.formatDate(fecha, timezone, 'yyyy-MM-dd\'T\'HH:mm:ss');
+
+    return [
+      timestamp,           // Timestamp
+      item.producto,       // Producto Base
+      item.cantidad,       // Cantidad inventariada (Stock Real)
+      '',                  // Stock Real (vacío por ahora)
+      item.unidad          // Unidad de venta
+    ];
+  });
+
+  // Insertar las filas en la hoja, a partir de la primera fila libre
+  const startRow = hojaHistorico.getLastRow() + 1;
+  hojaHistorico.getRange(startRow, 1, filas.length, 5).setValues(filas);
+
+  SpreadsheetApp.getUi().alert('Inventario histórico de prueba cargado correctamente.');
 }
 
 // =====================================================================================
