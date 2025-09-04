@@ -35,6 +35,8 @@ const TIMEZONE = "America/Santiago";
 function onOpen() {
   SpreadsheetApp.getUi()
       .createMenu('Inventario 2.0')
+      .addItem('Abrir Dashboard', 'showDashboard')
+      .addSeparator()
       .addItem('1. Configurar Hojas y Fórmulas', 'setup')
       .addSeparator()
       .addItem('2. Calcular Inventario de Hoy (Manual)', 'calcularInventarioDiario')
@@ -86,6 +88,13 @@ function setup() {
   const encabezadosReporte = ["Producto Base", "Inventario Ayer", "Compras del Día", "Ventas del Día", "Inventario Hoy", "Stock Real"];
   if (hojaReporte.getRange("A1").getValue() === "") {
     hojaReporte.getRange(1, 1, 1, encabezadosReporte.length).setValues([encabezadosReporte]).setFontWeight("bold");
+  }
+
+  // --- 6. Hoja de Discrepancias ---
+  const hojaDiscrepancias = obtenerOCrearHoja(ss, "Discrepancias");
+  const encabezadosDiscrepancias = ["Timestamp", "Producto Base", "Inventario Estimado", "Inventario Real", "Discrepancia"];
+   if (hojaDiscrepancias.getRange("A1").getValue() === "") {
+    hojaDiscrepancias.getRange(1, 1, 1, encabezadosDiscrepancias.length).setValues([encabezadosDiscrepancias]).setFontWeight("bold");
   }
 
   SpreadsheetApp.getUi().alert("¡Configuración completada! Las hojas han sido creadas y configuradas.");
@@ -207,12 +216,24 @@ function calcularInventarioDiario() {
 
     // --- 5. OBTENER INVENTARIO DE AYER ---
     const inventarioAyer = {}; // { "Producto Base": cantidad, ... }
-    datosHistorico.forEach(fila => {
-      const productoBase = fila[1];
-      const cantidad = parseFloat(fila[2]) || 0;
-      // Sobrescribe, la última entrada para un producto será la más reciente si los datos están ordenados
-      inventarioAyer[productoBase] = cantidad;
-    });
+    const productosVistos = new Set();
+    // Recorrer el histórico desde el final para encontrar la última entrada de cada producto
+    for (let i = datosHistorico.length - 1; i >= 0; i--) {
+        const fila = datosHistorico[i];
+        const productoBase = fila[1];
+        if (!productosVistos.has(productoBase)) {
+            const stockReal = parseFloat(fila[3]); // Columna D: Stock Real
+            const cantidadCalculada = parseFloat(fila[2]); // Columna C: Cantidad (estimada)
+
+            // Priorizar el stock real si existe y es un número válido
+            if (!isNaN(stockReal) && fila[3] !== '') {
+                inventarioAyer[productoBase] = stockReal;
+            } else {
+                inventarioAyer[productoBase] = cantidadCalculada || 0;
+            }
+            productosVistos.add(productoBase);
+        }
+    }
 
     // --- 6. CALCULAR INVENTARIO DE HOY Y PREPARAR REPORTE ---
     const todosLosProductos = new Set([...Object.keys(inventarioAyer), ...Object.keys(comprasDelDia), ...Object.keys(ventasDelDia)]);
@@ -305,4 +326,197 @@ function obtenerOCrearHoja(ss, nombreHoja) {
     hoja = ss.insertSheet(nombreHoja);
   }
   return hoja;
+}
+
+// =====================================================================================
+// SERVIDOR WEB PARA DASHBOARD
+// =====================================================================================
+
+/**
+ * Sirve la aplicación web del dashboard.
+ * Se ejecuta cuando un usuario visita la URL de la aplicación.
+ */
+function doGet(e) {
+  return HtmlService.createHtmlOutputFromFile('dashboard')
+      .setTitle('Dashboard de Inventario 2.0');
+}
+
+/**
+ * Lanza el dashboard en una barra lateral en la hoja de cálculo.
+ */
+function showDashboard() {
+  const html = HtmlService.createHtmlOutputFromFile('dashboard')
+      .setTitle('Dashboard de Inventario');
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+/**
+ * Obtiene todos los datos necesarios para renderizar el dashboard.
+ * Esta función es llamada desde el cliente (JavaScript en dashboard.html).
+ * @returns {Object} Un objeto con los datos de inventario, ventas, adquisiciones y KPIs.
+ */
+function getDashboardData() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const hojaReporte = ss.getSheetByName(HOJA_REPORTE_HOY);
+    const hojaOrders = ss.getSheetByName(HOJA_ORDERS);
+    const hojaAdquisiciones = ss.getSheetByName(HOJA_ADQUISICIONES);
+    const hojaSku = ss.getSheetByName(HOJA_SKU);
+
+    // --- 1. OBTENER MAPA SKU PARA UNIDADES Y CONVERSIONES ---
+    const datosSku = hojaSku.getRange("A2:K" + hojaSku.getLastRow()).getValues();
+    const mapaVentaSku = new Map();
+    datosSku.forEach(fila => {
+      const [nombreProducto, productoBase, , , , , , unidadVenta] = fila;
+      if (nombreProducto && productoBase) {
+        mapaVentaSku.set(nombreProducto, { productoBase, unidadVenta });
+      }
+    });
+
+    const mapaUnidades = new Map();
+     datosSku.forEach(fila => {
+      const [, productoBase, , , , , , unidadVenta] = fila;
+      if (productoBase && unidadVenta && !mapaUnidades.has(productoBase)) {
+        mapaUnidades.set(productoBase, unidadVenta);
+      }
+    });
+
+
+    // --- 2. OBTENER INVENTARIO ACTUAL ---
+    const datosInventario = hojaReporte.getLastRow() > 1 ? hojaReporte.getRange("A2:E" + hojaReporte.getLastRow()).getValues() : [];
+    const inventory = datosInventario.map(fila => ({
+      productoBase: fila[0],
+      inventarioAyer: fila[1],
+      compras: fila[2],
+      ventas: fila[3],
+      inventarioHoy: fila[4],
+      unidad: mapaUnidades.get(fila[0]) || 'N/A'
+    }));
+
+    // --- 3. OBTENER VENTAS DE HOY ---
+    const datosOrders = hojaOrders.getLastRow() > 1 ? hojaOrders.getRange("A2:K" + hojaOrders.getLastRow()).getValues() : [];
+    const sales = [];
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    datosOrders.forEach(fila => {
+      const fechaPedido = new Date(fila[8]); // Columna I: Fecha
+      if (fechaPedido >= hoy) {
+        const nombreProductoVendido = fila[9]; // Columna J: Nombre Producto
+        const skuInfo = mapaVentaSku.get(nombreProductoVendido);
+        sales.push({
+          pedido: fila[0], // Columna A: Order Number
+          cliente: fila[2], // Columna C: Billing Name
+          productoVendido: nombreProductoVendido,
+          productoBase: skuInfo ? skuInfo.productoBase : 'No Encontrado',
+          cantidad: fila[10] // Columna K: Cantidad
+        });
+      }
+    });
+
+    // --- 4. OBTENER ADQUISICIONES DE HOY ---
+    // Nota: Asumimos que todas las adquisiciones listadas son para el día.
+    const datosAdquisiciones = hojaAdquisiciones.getLastRow() > 1 ? hojaAdquisiciones.getRange("A2:D" + hojaAdquisiciones.getLastRow()).getValues() : [];
+    const acquisitions = datosAdquisiciones.map(fila => ({
+      productoBase: fila[1], // Columna B: Producto Base
+      formato: fila[2],      // Columna C: Formato de Compra
+      cantidad: fila[3]      // Columna D: Cantidad a Comprar
+    }));
+
+    // --- 5. CALCULAR KPIs ---
+    const kpis = {
+      totalProducts: inventory.length,
+      lowStock: inventory.filter(p => p.inventarioHoy <= 0).length,
+      discrepancies: 0 // Se implementará en el futuro
+    };
+
+    return {
+      inventory: inventory,
+      sales: sales.reverse(), // Mostrar las más recientes primero
+      acquisitions: acquisitions,
+      kpis: kpis
+    };
+
+  } catch (e) {
+    Logger.log(e);
+    // Devolver un error estructurado al cliente
+    return { error: e.message, stack: e.stack };
+  }
+}
+
+/**
+ * Guarda el inventario real introducido por el usuario.
+ * @param {Array<Object>} inventoryData Un array de objetos, cada uno con {productoBase, cantidad}.
+ */
+function saveRealInventory(inventoryData) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const hojaReporte = ss.getSheetByName(HOJA_REPORTE_HOY);
+    const hojaDiscrepancias = ss.getSheetByName("Discrepancias");
+    const hojaHistorico = ss.getSheetByName(HOJA_HISTORICO);
+
+    const datosReporte = hojaReporte.getRange("A2:F" + hojaReporte.getLastRow()).getValues();
+    const reporteMap = new Map(datosReporte.map(row => [row[0], row])); // Map by Producto Base
+
+    const datosHistorico = hojaHistorico.getRange("A2:E" + hojaHistorico.getLastRow()).getValues();
+
+    const discrepanciasNuevas = [];
+    const timestamp = new Date();
+
+    inventoryData.forEach(item => {
+      const productoBase = item.productoBase;
+      const cantidadReal = parseFloat(item.cantidad);
+
+      if (!isNaN(cantidadReal) && reporteMap.has(productoBase)) {
+        const filaReporte = reporteMap.get(productoBase);
+        const inventarioEstimado = parseFloat(filaReporte[4]); // Columna E: Inventario Hoy
+        const discrepancia = cantidadReal - inventarioEstimado;
+
+        // 1. Log en Hoja Discrepancias
+        discrepanciasNuevas.push([
+          timestamp,
+          productoBase,
+          inventarioEstimado,
+          cantidadReal,
+          discrepancia
+        ]);
+
+        // 2. Actualizar Stock Real en Hoja Reporte Hoy
+        // Encontrar la fila correcta y actualizar solo la columna F (Stock Real)
+        for (let i = 0; i < datosReporte.length; i++) {
+          if (datosReporte[i][0] === productoBase) {
+            hojaReporte.getRange(i + 2, 6).setValue(cantidadReal); // Fila i+2, Columna 6
+            break;
+          }
+        }
+
+        // 3. Actualizar Stock Real en la última entrada del Histórico para ese producto
+        // Esto es crucial para que el cálculo del día siguiente sea correcto.
+        let ultimaFilaProducto = -1;
+        for (let i = datosHistorico.length - 1; i >= 0; i--) {
+          if (datosHistorico[i][1] === productoBase) {
+             ultimaFilaProducto = i;
+             break;
+          }
+        }
+        if(ultimaFilaProducto !== -1) {
+            // La columna D (4) es 'Stock Real' en Histórico
+            hojaHistorico.getRange(ultimaFilaProducto + 2, 4).setValue(cantidadReal);
+        }
+      }
+    });
+
+    if (discrepanciasNuevas.length > 0) {
+      hojaDiscrepancias.getRange(hojaDiscrepancias.getLastRow() + 1, 1, discrepanciasNuevas.length, 5).setValues(discrepanciasNuevas);
+    }
+
+    // Forzar un recálculo para que el "Inventario Ayer" del próximo ciclo sea el real
+    calcularInventarioDiario();
+
+    return { success: true, message: "Inventario real guardado correctamente." };
+
+  } catch (e) {
+    Logger.log(e);
+    return { success: false, error: e.message };
+  }
 }
