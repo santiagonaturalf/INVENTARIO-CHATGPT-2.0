@@ -147,21 +147,6 @@
         <div id="inventory-panel">
             <h2>Inventario del Día</h2>
 
-            <div class="summary-cards">
-                <div class="card">
-                    <h3>Productos a Inventariar</h3>
-                    <p id="total-to-inventory">0</p>
-                </div>
-                <div class="card">
-                    <h3>Stock Bajo</h3>
-                    <p id="low-stock-count">0</p>
-                </div>
-                <div class="card">
-                    <h3>Discrepancias</h3>
-                    <p id="discrepancies-count">0</p>
-                </div>
-            </div>
-
             <!-- Tabla de inventario -->
             <div class="table-wrapper">
                 <table id="inventory-table">
@@ -203,11 +188,8 @@
 
         function handleSuccess(data) {
             setLoadingState(false);
-            if (data.error) {
-                handleError(data);
-                return;
-            }
-            renderKpis(data.kpis);
+            // The new function returns the inventory directly in the `inventory` property.
+            // The top-level object also contains `sales` and `acquisitions` which we ignore for now.
             renderInventory(data.inventory);
         }
 
@@ -217,31 +199,26 @@
             alert("Ocurrió un error al cargar los datos: " + error.message);
         }
 
-        function renderKpis(kpis) {
-            document.getElementById("total-to-inventory").textContent = kpis.totalToInventory || 0;
-            document.getElementById("low-stock-count").textContent = kpis.lowStockCount || 0;
-            document.getElementById("discrepancies-count").textContent = kpis.discrepanciesCount || 0;
-        }
-
         function renderInventory(inventory) {
             const tbody = document.querySelector("#inventory-table tbody");
             tbody.innerHTML = "";
             if (!inventory || inventory.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No hay productos relevantes para mostrar.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No hay productos para inventariar.</td></tr>';
                 return;
             }
             inventory.forEach(item => {
-                const stockClass = item.inventarioHoy < 0 ? 'negative-stock' : (item.inventarioHoy <= 5 ? 'low-stock' : '');
-                const realStockValue = item.stockReal !== null ? item.stockReal : item.inventarioHoy;
+                // The new function provides placeholder values (0) for most fields.
+                const stockClass = item.expectedStock <= 0 ? 'low-stock' : '';
+                const realStockValue = item.expectedStock;
 
                 const row = `
-                    <tr class="${stockClass}" data-product-base="${item.productoBase}">
-                        <td>${item.productoBase}</td>
-                        <td>${item.inventarioAyer.toFixed(2)}</td>
-                        <td>${item.compras.toFixed(2)}</td>
-                        <td>${item.ventas.toFixed(2)}</td>
-                        <td><strong>${item.inventarioHoy.toFixed(2)}</strong></td>
-                        <td>${item.unidad}</td>
+                    <tr class="${stockClass}" data-product-base="${item.baseProduct}">
+                        <td>${item.baseProduct}</td>
+                        <td>${Number(item.lastInventory).toFixed(2)}</td>
+                        <td>${Number(item.purchases).toFixed(2)}</td>
+                        <td>${Number(item.sales).toFixed(2)}</td>
+                        <td><strong>${Number(item.expectedStock).toFixed(2)}</strong></td>
+                        <td>${item.unit}</td>
                         <td><input type="number" step="any" class="real-stock-input" value="${realStockValue.toFixed(2)}"></td>
                     </tr>`;
                 tbody.innerHTML += row;

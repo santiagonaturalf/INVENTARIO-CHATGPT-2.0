@@ -352,69 +352,68 @@ function showDashboard() {
 }
 
 /**
- * Obtiene todos los datos necesarios para renderizar el dashboard.
- * Esta función es llamada desde el cliente (JavaScript en dashboard.html).
- * @returns {Object} Un objeto con los datos de inventario, ventas, adquisiciones y KPIs.
+ * Devuelve todos los productos base registrados en la hoja SKU para mostrarlos en el dashboard,
+ * aunque todavía no tengan datos de inventario.
+ *
+ * Estructura de la hoja SKU (columnas relevantes):
+ *   A: Nombre Producto
+ *   B: Producto Base
+ *   C: Formato Adquisición
+ *   D: Cantidad Adquisición
+ *   E: Unidad Adquisición
+ *   F: Categoría
+ *   G: Cantidad Venta
+ *   H: Unidad Venta
+ *
+ * @returns {Object} Un objeto con:
+ *   - inventory: arreglo con cada producto base y valores iniciales en cero
+ *   - sales: []
+ *   - acquisitions: []
  */
 function getDashboardData() {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const hojaReporte = ss.getSheetByName(HOJA_REPORTE_HOY);
-    const hojaSku = ss.getSheetByName(HOJA_SKU);
-    const hojaDiscrepancias = ss.getSheetByName("Discrepancias");
-
-    // --- 1. OBTENER MAPA DE UNIDADES ---
-    const datosSku = hojaSku.getRange("A2:K" + hojaSku.getLastRow()).getValues();
-    const mapaUnidades = new Map();
-    datosSku.forEach(fila => {
-      const [, productoBase, , , , , , unidadVenta] = fila;
-      if (productoBase && unidadVenta && !mapaUnidades.has(productoBase)) {
-        mapaUnidades.set(productoBase, unidadVenta);
-      }
-    });
-
-    // --- 2. OBTENER INVENTARIO ACTUAL ---
-    const datosInventario = hojaReporte.getLastRow() > 1 ? hojaReporte.getRange("A2:F" + hojaReporte.getLastRow()).getValues() : [];
-    const allInventory = datosInventario.map(fila => ({
-      productoBase: fila[0],
-      inventarioAyer: parseFloat(fila[1]) || 0,
-      compras: parseFloat(fila[2]) || 0,
-      ventas: parseFloat(fila[3]) || 0,
-      inventarioHoy: parseFloat(fila[4]) || 0,
-      stockReal: fila[5] ? parseFloat(fila[5]) : null,
-      unidad: mapaUnidades.get(fila[0]) || 'N/A'
-    }));
-
-    // --- 3. FILTRAR PRODUCTOS RELEVANTES ---
-    const relevantInventory = allInventory.filter(item => {
-      const hasMovement = item.compras > 0 || item.ventas > 0;
-      const isLowStock = item.inventarioHoy <= 5; // Umbral de stock bajo
-      // Consideramos relevante si tiene movimiento, es stock bajo o tiene stock positivo
-      return hasMovement || isLowStock || item.inventarioHoy > 0;
-    });
-
-    // --- 4. CALCULAR KPIs ---
-    const datosDiscrepancias = hojaDiscrepancias.getLastRow() > 1 ? hojaDiscrepancias.getRange("A2:E" + hojaDiscrepancias.getLastRow()).getValues() : [];
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    const discrepanciasHoy = datosDiscrepancias.filter(d => new Date(d[0]) >= hoy).length;
-
-    const kpis = {
-      totalToInventory: relevantInventory.length,
-      lowStockCount: allInventory.filter(p => p.inventarioHoy <= 5 && p.inventarioHoy > 0).length,
-      discrepanciesCount: discrepanciasHoy,
-    };
-
-    // --- 5. RETORNAR DATOS PARA EL DASHBOARD ---
-    return {
-      inventory: relevantInventory,
-      kpis: kpis
-    };
-
-  } catch (e) {
-    Logger.log(e);
-    return { error: e.message, stack: e.stack };
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const skuSheet = ss.getSheetByName(HOJA_SKU);
+  if (!skuSheet) {
+    throw new Error('No se encontró la hoja "SKU". Verifica el nombre de la hoja.');
   }
+
+  const lastRow = skuSheet.getLastRow();
+  if (lastRow < 2) {
+    return { inventory: [], sales: [], acquisitions: [] };
+  }
+
+  // Leer columnas de la hoja SKU: B (Producto Base) y H (Unidad Venta)
+  const data = skuSheet.getRange(2, 2, lastRow - 1, 7).getValues();
+  // data = matriz de filas, cada fila = [Producto Base, Formato Adq, Cantidad Adq, Unidad Adq, Categoría, Cantidad Venta, Unidad Venta]
+
+  // Construir un map único por producto base para no duplicar
+  const uniqueBases = new Map();
+  data.forEach(row => {
+    const productoBase = row[0];
+    const unidadVenta = row[6] || ''; // Columna H (índice 6) es Unidad Venta
+    if (productoBase && !uniqueBases.has(productoBase)) {
+      uniqueBases.set(productoBase, unidadVenta);
+    }
+  });
+
+  // Crear el arreglo de inventario con valores iniciales en 0
+  const inventory = [];
+  uniqueBases.forEach((unidad, producto) => {
+    inventory.push({
+      baseProduct: producto,
+      lastInventory: 0,
+      purchases: 0,
+      sales: 0,
+      expectedStock: 0,
+      unit: unidad
+    });
+  });
+
+  return {
+    inventory: inventory,
+    sales: [],
+    acquisitions: []
+  };
 }
 
 /**
