@@ -385,12 +385,10 @@ function getDashboardData() {
       unidad: mapaUnidades.get(fila[0]) || 'N/A'
     }));
 
-    // --- 3. FILTRAR PRODUCTOS RELEVANTES ---
+    // --- 3. FILTRAR PRODUCTOS RELEVANTES (lógica del usuario) ---
     const relevantInventory = allInventory.filter(item => {
-      const hasMovement = item.compras > 0 || item.ventas > 0;
-      const isLowStock = item.inventarioHoy <= 5; // Umbral de stock bajo
-      // Consideramos relevante si tiene movimiento, es stock bajo o tiene stock positivo
-      return hasMovement || isLowStock || item.inventarioHoy > 0;
+      // Incluir si hay stock esperado, compras o ventas.
+      return item.inventarioHoy > 0 || item.compras > 0 || item.ventas > 0;
     });
 
     // --- 4. CALCULAR KPIs ---
