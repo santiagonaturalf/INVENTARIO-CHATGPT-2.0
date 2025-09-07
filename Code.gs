@@ -600,12 +600,13 @@ function getDashboardData() {
       const qty = parseFloat((r[2] || '0').toString().replace(',', '.'));
       const realQty = parseFloat((r[3] || '').toString().replace(',', '.'));
 
-      if (!base || !(ts instanceof Date) || isNaN(ts.getTime())) return;
+      const when = (ts instanceof Date) ? ts : new Date(ts);
+      if (!base || isNaN(when.getTime())) return;
 
       const currentQty = !isNaN(realQty) ? realQty : qty;
       const prev = lastInvMap.get(base);
-      if (!prev || ts > prev.ts) {
-        lastInvMap.set(base, { ts, qty: currentQty });
+      if (!prev || when > prev.ts) {
+        lastInvMap.set(base, { ts: when, qty: currentQty });
       }
     });
   }
@@ -686,13 +687,6 @@ function getDashboardData() {
   };
 }
 
-/***********************************************************/
-/* OPCIONAL: “VLOOKUP del último” para una sola clave      */
-/***********************************************************/
-function lookupUltimoInventarioCantidad(productoBase) {
-  const m = _mapUltimoInventario(false); // false: usa SIEMPRE Cantidad(C)
-  return m.get(productoBase)?.qty || 0;
-}
 
 /**
  * Guarda el inventario real introducido por el usuario.
