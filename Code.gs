@@ -39,6 +39,7 @@ function onOpen() {
       .addItem('Abrir Dashboard v3', 'showDashboardV3')
       .addSeparator()
       .addItem('1. Configurar Hojas y Fórmulas', 'setup')
+      .addItem('Enriquecer Datos de Orders', 'completarSKUenOrders')
       .addSeparator()
       .addItem('2. Calcular Inventario de Hoy (Manual)', 'calcularInventarioDiario')
       .addSeparator()
@@ -305,6 +306,103 @@ function calcularInventarioDiario() {
   }
 }
 
+/**
+ * Completa las columnas 'Producto Base', 'Cantidad (venta)' y 'Unidad Venta' en la hoja 'Orders'
+ * basándose en el mapeo de la hoja 'SKU'. Solo rellena las celdas que están vacías.
+ * Es útil para enriquecer datos de forma manual o bajo demanda.
+ * Esta versión es robusta: crea los encabezados si no existen.
+ */
+function completarSKUenOrders() {
+  const ss = SpreadsheetApp.getActive();
+  const shOrders = ss.getSheetByName('Orders');
+  const shSKU = ss.getSheetByName('SKU');
+  if (!shOrders || !shSKU) throw new Error('Faltan hojas Orders o SKU');
+
+  // --- Asegurar encabezados en columnas L, M, N ---
+  shOrders.getRange('L1').setValue('Producto Base');
+  shOrders.getRange('M1').setValue('Cantidad (venta)');
+  shOrders.getRange('N1').setValue('Unidad Venta');
+  SpreadsheetApp.flush(); // Asegurar que los encabezados se escriban antes de continuar
+
+  // --- Lectura de datos (después de asegurar encabezados) ---
+  const orders = shOrders.getDataRange().getValues();
+  const sku = shSKU.getDataRange().getValues();
+  if (orders.length < 2 || sku.length < 2) return;
+
+  // --- Definición de Índices ---
+  const hdrO = orders[0].map(String);
+  const idxNombre = hdrO.indexOf('Nombre Producto');
+  const idxCantOrd = hdrO.indexOf('Cantidad');
+  const idxBase = hdrO.indexOf('Producto Base');
+  const idxCantVen = hdrO.indexOf('Cantidad (venta)');
+  const idxUniVen = hdrO.indexOf('Unidad Venta');
+
+  if (idxNombre === -1 || idxCantOrd === -1) {
+    throw new Error('Faltan las columnas de origen críticas: "Nombre Producto" y/o "Cantidad" en la hoja "Orders".');
+  }
+
+  // Mapa SKU
+  const hdrS = sku[0].map(String);
+  const sNombre = hdrS.indexOf('Nombre Producto');
+  const sBase = hdrS.indexOf('Producto Base');
+  const sCantV = hdrS.indexOf('Cantidad Venta');
+  const sUniV = hdrS.indexOf('Unidad Venta');
+  if ([sNombre, sBase, sCantV, sUniV].some(i => i === -1)) {
+    throw new Error('En la hoja "SKU" faltan columnas críticas: Nombre Producto, Producto Base, Cantidad Venta, Unidad Venta');
+  }
+
+  const map = {};
+  for (let i = 1; i < sku.length; i++) {
+    const n = (sku[i][sNombre] ?? '').toString().trim().toLowerCase();
+    if (!n) continue;
+    map[n] = {
+      base: sku[i][sBase],
+      fac: Number(sku[i][sCantV]) || 0,
+      uni: sku[i][sUniV]
+    };
+  }
+
+  // --- Procesamiento y enriquecimiento ---
+  const out = orders.slice(); // copia editable
+  const faltantes = new Set();
+
+  for (let r = 1; r < out.length; r++) {
+    const nombre = (out[r][idxNombre] ?? '').toString().trim().toLowerCase();
+    if (!nombre) continue;
+    const qtyOrd = Number(out[r][idxCantOrd]) || 0;
+    const s = map[nombre];
+
+    // Solo escribir si las celdas de destino están vacías
+    if (out[r][idxBase] === "" || out[r][idxBase] === null) {
+      if (s) {
+        out[r][idxBase] = s.base;
+      } else {
+        faltantes.add(out[r][idxNombre]);
+        continue; // Si no hay SKU, no podemos rellenar el resto
+      }
+    }
+    if (out[r][idxCantVen] === "" || out[r][idxCantVen] === null) {
+      if (s) out[r][idxCantVen] = qtyOrd * (s.fac || 0);
+    }
+    if (out[r][idxUniVen] === "" || out[r][idxUniVen] === null) {
+      if (s) out[r][idxUniVen] = s.uni;
+    }
+  }
+
+  // --- Volcado de datos ---
+  shOrders.getRange(1, 1, out.length, out[0].length).setValues(out);
+
+  if (faltantes.size > 0) {
+    const shMiss = ss.getSheetByName('SKU_FALTANTES') || ss.insertSheet('SKU_FALTANTES');
+    shMiss.clear();
+    shMiss.getRange(1,1,1,1).setValue('Nombre Producto no mapeado en SKU (desde Enriquecer)');
+    shMiss.getRange(2,1,faltantes.size,1).setValues([...faltantes].map(v => [v]));
+    SpreadsheetApp.getUi().alert(`Proceso completado. Se encontraron ${faltantes.size} productos sin mapeo en SKU. Revisa la hoja 'SKU_FALTANTES'.`);
+  } else {
+    SpreadsheetApp.getUi().alert('Proceso de enriquecimiento completado exitosamente.');
+  }
+}
+
 
 // =====================================================================================
 // FUNCIONES DE PRUEBA Y CONFIGURACIÓN
@@ -437,6 +535,14 @@ function obtenerOCrearHoja(ss, nombreHoja) {
     hoja = ss.insertSheet(nombreHoja);
   }
   return hoja;
+}
+
+function unitToKg_(unidadVenta) {
+  const u = norm(unidadVenta);
+  if (u === 'kilo' || u === 'kg') return 1;
+  if (u === 'gramo' || u === 'g' || u === 'gramos') return 0.001;
+  if (u === 'unidad' || u === 'unidades') return 1; // asumir factor ya está en Kg
+  throw new Error(`Unidad Venta no soportada: "${unidadVenta}"`);
 }
 
 // =====================================================================================
@@ -690,14 +796,6 @@ function getHeaderIndexes_(headerRow, headerMap) {
   return idx;
 }
 
-function unitToKg_(unidadVenta) {
-  const u = norm(unidadVenta);
-  if (u === 'kilo' || u === 'kg') return 1;
-  if (u === 'gramo' || u === 'g' || u === 'gramos') return 0.001;
-  if (u === 'unidad' || u === 'unidades') return 1; // asumir factor ya está en Kg
-  throw new Error(`Unidad Venta no soportada: "${unidadVenta}"`);
-}
-
 function startOfToday_(tz) {
   const now = new Date();
   const str = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
@@ -833,6 +931,75 @@ function getVentasPorBaseHoy_JSON() {
   return data;
 }
 
+/** Config de compras por día (activa SOLO_HOY si la hoja Adquisiciones tiene columna "Fecha") */
+const SOLO_HOY = false;
+
+/** Devuelve el inicio del día en la zona horaria dada */
+function _startOfDay_(tz) {
+  const now = new Date();
+  const s = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+  return new Date(`${s}T00:00:00`);
+}
+function _startOfTomorrow_(tz) {
+  const t0 = _startOfDay_(tz);
+  return new Date(t0.getTime() + 24 * 60 * 60 * 1000);
+}
+
+/**
+ * Suma compras por Producto Base con la regla F + H − E.
+ * Usa nombres de encabezado para encontrar columnas. Si existe "Fecha" y SOLO_HOY = true, filtra solo el día actual.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} adqSheet Hoja "Adquisiciones"
+ * @returns {Map<string, number>} comprasPorBase
+ */
+function getComprasPorBase_SUMARSI_(adqSheet) {
+  const comprasPorBase = new Map();
+  if (!adqSheet || adqSheet.getLastRow() < 2) return comprasPorBase;
+
+  const values = adqSheet.getDataRange().getValues();
+  const headers = values[0].map(h => ('' + h).trim());
+  const idxBase = headers.indexOf('Producto Base');
+
+  // Ajusta estos nombres según tus encabezados reales
+  const idxE = headers.indexOf('Inventario Actual');      // Col. E
+  const idxF = headers.indexOf('Necesidad de Venta');     // Col. F
+  const idxH = headers.indexOf('Inventario al Finalizar'); // Col. H
+
+  if (idxBase === -1 || idxE === -1 || idxF === -1 || idxH === -1) {
+    Logger.log('No se encontraron las columnas requeridas (Producto Base / Inventario Actual / Necesidad de Venta / Inventario al Finalizar).');
+    return comprasPorBase;
+  }
+
+  // Filtrado opcional por fecha
+  const idxFecha = headers.indexOf('Fecha');
+  let t0 = null, t1 = null;
+  if (SOLO_HOY && idxFecha !== -1) {
+    t0 = _startOfDay_(TIMEZONE);
+    t1 = _startOfTomorrow_(TIMEZONE);
+  }
+
+  for (let r = 1; r < values.length; r++) {
+    if (SOLO_HOY && idxFecha !== -1) {
+      const fr = values[r][idxFecha];
+      if (!fr) continue;
+      const f = (fr instanceof Date) ? fr : new Date(fr);
+      if (!(f >= t0 && f < t1)) continue;
+    }
+
+    const base = (values[r][idxBase] ?? '').toString().trim();
+    if (!base) continue;
+
+    const e = parseFloat(('' + values[r][idxE]).replace(',', '.')) || 0;
+    const f = parseFloat(('' + values[r][idxF]).replace(',', '.')) || 0;
+    const h = parseFloat(('' + values[r][idxH]).replace(',', '.')) || 0;
+    const total = f + h - e;
+
+    if (total !== 0) {
+      comprasPorBase.set(base, (comprasPorBase.get(base) || 0) + total);
+    }
+  }
+  return comprasPorBase;
+}
+
 // =====================================
 // getDashboardData CON COMPRAS INCLUIDO
 // =====================================
@@ -881,37 +1048,31 @@ function getDashboardData() {
     });
   }
 
-  // === 3) Ventas hoy (Lógica nueva)
-  const ventasHoyData = getVentasPorBaseHoy_JSON(); // Llama a la nueva función
-  const ventasPorBase = new Map(Object.entries(ventasHoyData)); // Convierte el objeto a un Map para compatibilidad
+  // === 3) Ventas del día (lógica simple SUMAR.SI)
+  const ventasPorBase = new Map();
+  const ordersData = ordersSheet.getDataRange().getValues();
+  const ordersHeaders = ordersData[0].map(h => (''+h).trim());
 
-  // === 4) Compras hoy
-  const comprasPorBase = new Map();
-  const inconsistencias = new Map();
-  if (adqSheet && adqSheet.getLastRow() > 1) {
-    const idxBase   = indexByHeader(adqSheet, 'Producto Base');
-    const idxCant   = indexByHeader(adqSheet, 'Cantidad a Comprar');
-    const idxForma  = indexByHeader(adqSheet, 'Formato de Compra');
-    if (idxBase !== -1 && idxCant !== -1 && idxForma !== -1) {
-      const adqData = adqSheet.getRange(2, 1, adqSheet.getLastRow()-1, adqSheet.getLastColumn()).getValues();
-      adqData.forEach(r => {
-        const base = r[idxBase];
-        const cantCompra = parseFloat((r[idxCant] || '0').toString().replace(',', '.')) || 0;
-        const formato = r[idxForma];
-        if (!base || !cantCompra || !formato) return;
-        const dashUnit = baseUnitMap.get(base) || '';
-        const parsed = parseFormatoCompra(formato);
-        const conv = convertAcquisitionToDashUnit(cantCompra, parsed, dashUnit);
-        if (conv.ok) {
-          comprasPorBase.set(base, (comprasPorBase.get(base) || 0) + conv.qty);
-        } else {
-          if (!inconsistencias.has(base)) {
-            inconsistencias.set(base, conv.reason || 'Inconsistencia de unidades');
-          }
-        }
-      });
+  const idxProductoBase = ordersHeaders.indexOf('Producto Base'); // Col L
+  const idxCantidadVenta = ordersHeaders.indexOf('Cantidad (venta)'); // Col M
+
+  if (idxProductoBase !== -1 && idxCantidadVenta !== -1) {
+    for (let i = 1; i < ordersData.length; i++) {
+      const row = ordersData[i];
+      const productoBase = row[idxProductoBase];
+      const cantidad = parseFloat(row[idxCantidadVenta]) || 0;
+
+      if (productoBase && cantidad > 0) {
+        const key = (''+productoBase).trim();
+        ventasPorBase.set(key, (ventasPorBase.get(key) || 0) + cantidad);
+      }
     }
+  } else {
+      Logger.log("No se encontraron las columnas 'Producto Base' (L) o 'Cantidad (venta)' (M) en la hoja 'Orders'. Las ventas aparecerán en 0. Ejecuta 'Enriquecer Datos de Orders' primero.");
   }
+
+  // === 4) Compras hoy (calculo F + H − E por Producto Base)
+  const comprasPorBase = getComprasPorBase_SUMARSI_(adqSheet);
 
   // === 5) Armar inventory[] para el Dashboard
   const inventory = [];
@@ -920,8 +1081,6 @@ function getDashboardData() {
     const lastInventory = lastInv ? lastInv.qty : 0;
     const sales    = ventasPorBase.get(base)   || 0;
     const purchases= comprasPorBase.get(base)  || 0;
-    const errMsg = inconsistencias.get(base) || '';
-    const error  = !!errMsg;
 
     inventory.push({
       baseProduct:  base,
@@ -930,8 +1089,8 @@ function getDashboardData() {
       sales:        sales,
       expectedStock: lastInventory + purchases - sales,
       unit:         unidad,
-      error:        error,
-      errorMsg:     errMsg
+      error:        false,
+      errorMsg:     ""
     });
   });
 
