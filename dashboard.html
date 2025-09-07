@@ -148,11 +148,14 @@
             <div id="mensaje" style="display:none; padding: 10px; margin-bottom: 15px; border-radius: 8px; background-color: #FFF0F0; color: #D8000C; border: 1px solid #FFDADA;"></div>
             <h2>Inventario del Día</h2>
 
+            <input type="text" id="search-input" onkeyup="filterTable()" placeholder="Buscar por Producto Base..." style="width: 100%; padding: 10px; margin-bottom: 20px; border: 1px solid var(--border-color); border-radius: 6px;">
+
             <!-- Tabla de inventario -->
             <div class="table-wrapper">
                 <table id="inventory-table">
                     <thead>
                         <tr>
+                            <th>Categoría</th>
                             <th>Producto Base</th>
                             <th>Inv. Ayer</th>
                             <th>Compras</th>
@@ -185,12 +188,12 @@
                 .withSuccessHandler(function (payload) {
                     setLoadingState(false);
                     try {
-                        if (!payload || payload.ok === false) {
+                        if (!payload || !payload.inventory) {
                             mostrarMensaje(payload?.msg || 'No se pudo cargar la data.');
-                            renderTabla([]); // evita “undefined”
+                            renderTabla([]);
                             return;
                         }
-                        renderTabla(payload.inventory || []);
+                        renderTabla(payload.inventory);
                     } catch (e) {
                         mostrarMensaje('Error renderizando: ' + e.message);
                     }
@@ -211,7 +214,7 @@
             const tbody = document.querySelector("#inventory-table tbody");
             tbody.innerHTML = "";
             if (!inventory || inventory.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No hay productos para inventariar.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No hay productos para inventariar.</td></tr>';
                 return;
             }
             inventory.forEach(item => {
@@ -220,6 +223,7 @@
 
                 const row = `
                     <tr class="${stockClass}" data-product-base="${item.baseProduct}">
+                        <td>${item.category}</td>
                         <td>${item.baseProduct}</td>
                         <td>${Number(item.lastInventory).toFixed(2)}</td>
                         <td>${Number(item.purchases).toFixed(2)}</td>
@@ -230,6 +234,25 @@
                     </tr>`;
                 tbody.innerHTML += row;
             });
+        }
+
+        function filterTable() {
+            const input = document.getElementById("search-input");
+            const filter = input.value.toUpperCase();
+            const table = document.getElementById("inventory-table");
+            const tr = table.getElementsByTagName("tr");
+
+            for (let i = 1; i < tr.length; i++) { // Comienza en 1 para saltar el encabezado
+                const td = tr[i].getElementsByTagName("td")[1]; // Columna de "Producto Base"
+                if (td) {
+                    const txtValue = td.textContent || td.innerText;
+                    if (txtValue.toUpperCase().indexOf(filter) > -1) {
+                        tr[i].style.display = "";
+                    } else {
+                        tr[i].style.display = "none";
+                    }
+                }
+            }
         }
 
         function saveInventory() {
@@ -266,7 +289,7 @@
             setLoadingState(false);
             if (response.success) {
                 mostrarMensaje("Inventario guardado correctamente. Actualizando...");
-                setTimeout(cargarDashboard, 1000); // Recargar los datos para reflejar los cambios
+                setTimeout(cargarDashboard, 1000);
             } else {
                 handleError({ message: response.error });
             }

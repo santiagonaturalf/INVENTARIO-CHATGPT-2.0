@@ -521,29 +521,36 @@ function _mapUltimoInventario(preferirStockReal) {
 /********************************************/
 function _buildSkuLookups() {
   // Devuelve:
-  //  - baseUnits: Map(Producto Base -> Unidad Venta desde SKU)
-  //  - skuByNombre: Map(Nombre Producto -> {productoBase, cantidadVenta, unidadVenta})
+  //  - baseInfoMap: Map(Producto Base -> { unit, category })
+  //  - skuByNombre: Map(Nombre Producto -> { productoBase, cantidadVenta, unidadVenta })
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sku = ss.getSheetByName(HOJA_SKU);
-  if (!sku || sku.getLastRow() < 2) return { baseUnits: new Map(), skuByNombre: new Map() };
+  if (!sku || sku.getLastRow() < 2) return { baseInfoMap: new Map(), skuByNombre: new Map() };
 
-  // Tomamos A:H (1..8) para cubrir: Nombre Producto, Producto Base, ... , Cantidad Venta(G), Unidad Venta(H)
+  // Tomamos A:H para cubrir: Nombre, Base, Categoria (F), Cantidad Venta(G), Unidad Venta(H)
   const data = sku.getRange(2, 1, sku.getLastRow() - 1, 8).getValues();
 
-  const baseUnits = new Map();
+  const baseInfoMap = new Map();
   const skuByNombre = new Map();
 
   data.forEach(r => {
-    const nombreProducto = r[0];       // A
-    const productoBase   = r[1];       // B
-    const cantidadVenta  = _toNumber(r[6]); // G
-    const unidadVenta    = r[7] || ''; // H
-    if (productoBase && !baseUnits.has(productoBase)) baseUnits.set(productoBase, unidadVenta);
-    if (nombreProducto) skuByNombre.set(nombreProducto, { productoBase, cantidadVenta, unidadVenta });
+    const nombreProducto = r[0] || '';       // A
+    const productoBase   = r[1] || '';       // B
+    const categoria      = r[5] || 'Sin Categoría'; // F
+    const cantidadVenta  = _toNumber(r[6]);  // G
+    const unidadVenta    = r[7] || '';       // H
+
+    if (productoBase && !baseInfoMap.has(productoBase)) {
+      baseInfoMap.set(productoBase, { unit: unidadVenta, category: categoria });
+    }
+    if (nombreProducto) {
+      skuByNombre.set(nombreProducto, { productoBase, cantidadVenta, unidadVenta });
+    }
   });
 
-  return { baseUnits, skuByNombre };
+  return { baseInfoMap, skuByNombre };
 }
+
 
 /********************************************/
 /* REEMPLAZA TU getDashboardData()          */
@@ -552,26 +559,24 @@ function getDashboardData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const orders = ss.getSheetByName(HOJA_ORDERS);
   if (!orders) throw new Error('No se encontró la hoja Orders.');
-  const { baseUnits, skuByNombre } = _buildSkuLookups();
+  const { baseInfoMap, skuByNombre } = _buildSkuLookups();
 
   // 1) Último inventario por Producto Base (Inv. Ayer teórico)
-  //    Si quieres que ignore Stock Real y SIEMPRE tome CANTIDAD (C), pon false.
-  const preferirStockReal = false; // <=== CAMBIA a true si quieres priorizar Stock Real (D)
+  const preferirStockReal = false;
   const lastInvMap = _mapUltimoInventario(preferirStockReal);
 
-  // 2) Ventas de Hoy (por Producto Base), robusto con fechas texto/Date
+  // 2) Ventas de Hoy (por Producto Base)
   const hoy = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
   const rows = orders.getLastRow() > 1 ? orders.getRange(2, 1, orders.getLastRow() - 1, 11).getValues() : [];
-  const ventasPorBase = new Map(); // base -> total (en unidad base)
+  const ventasPorBase = new Map();
 
   rows.forEach(r => {
-    const fecha    = r[8];            // I: Fecha
-    const skuName  = r[9];            // J: Nombre Producto
-    const qtyVenta = _toNumber(r[10]); // K: Cantidad
+    const fecha    = r[8];
+    const skuName  = r[9];
+    const qtyVenta = _toNumber(r[10]);
 
     if (!skuName || !qtyVenta) return;
-    const dia = _dayString(fecha);
-    if (dia !== hoy) return;
+    if (_dayString(fecha) !== hoy) return;
 
     const sku = skuByNombre.get(skuName);
     if (!sku || !sku.productoBase) return;
@@ -580,30 +585,35 @@ function getDashboardData() {
     ventasPorBase.set(sku.productoBase, (ventasPorBase.get(sku.productoBase) || 0) + cantidadBase);
   });
 
-  // 3) Ensamblar el arreglo que el HTML del dashboard consume
+  // 3) Ensamblar el arreglo para el dashboard
   const inventory = [];
-  baseUnits.forEach((unit, baseProduct) => {
+  baseInfoMap.forEach(({ unit, category }, baseProduct) => {
     const last = lastInvMap.get(baseProduct);
     const invAyer = last ? _toNumber(last.qty) : 0;
     const sales   = ventasPorBase.get(baseProduct) || 0;
 
     inventory.push({
-      baseProduct: baseProduct,   // Producto Base
-      lastInventory: invAyer,     // Inv. Ayer (último inventario)
-      purchases: 0,               // Lo calcularemos luego con Adquisiciones
-      sales: sales,               // Ventas de hoy en unidad base
-      expectedStock: invAyer - sales, // Temporal: invAyer + compras - ventas (compras=0 por ahora)
+      baseProduct: baseProduct,
+      category: category,
+      lastInventory: invAyer,
+      purchases: 0,
+      sales: sales,
+      expectedStock: invAyer - sales,
       unit: unit || (last ? last.unit : '')
     });
   });
 
-  // Ordena por nombre para consistencia visual
-  inventory.sort((a, b) => a.baseProduct.localeCompare(b.baseProduct));
+  // Ordenar por categoría, y luego por nombre de producto
+  inventory.sort((a, b) => {
+    if (a.category < b.category) return -1;
+    if (a.category > b.category) return 1;
+    return a.baseProduct.localeCompare(b.baseProduct);
+  });
 
   return {
     inventory: inventory,
-    sales: [],        // opcional: tabla de detalle si la quieres construir
-    acquisitions: []  // pendiente: compras del día
+    sales: [],
+    acquisitions: []
   };
 }
 
