@@ -571,6 +571,7 @@ function getDashboardData() {
   const skuSheet       = ss.getSheetByName(HOJA_SKU);
   const ordersSheet    = ss.getSheetByName(HOJA_ORDERS);
   const adqSheet       = ss.getSheetByName(HOJA_ADQUISICIONES);
+  const histSheet      = ss.getSheetByName(HOJA_HISTORICO);
 
   if (!skuSheet || !ordersSheet) {
     throw new Error('No se encontraron las hojas SKU u Orders.');
@@ -579,101 +580,99 @@ function getDashboardData() {
   // === 1) Mapa SKU: Nombre Producto -> {productoBase, cantidadVenta, unidadVenta}
   const skuData = skuSheet.getRange(2, 1, Math.max(0, skuSheet.getLastRow()-1), 8).getValues();
   const skuMap = new Map();
-  skuData.forEach(r => {
-    const nombreProd = r[0];                 // A
-    const productoBase = r[1];               // B
-    const cantidadVenta = parseFloat(r[6]) || 0;  // G
-    const unidadVenta   = r[7] || '';        // H
-    if (nombreProd) skuMap.set(nombreProd, { productoBase, cantidadVenta, unidadVenta });
-  });
-
-  // === 2) BaseMap: Producto Base -> Unidad (desde SKU)
   const baseUnitMap = new Map();
   skuData.forEach(r => {
-    const base = r[1];
-    const u    = r[7] || '';
-    if (base && !baseUnitMap.has(base)) baseUnitMap.set(base, u);
+    const nombreProd = r[0];
+    const productoBase = r[1];
+    const cantidadVenta = parseFloat((r[6] || '0').toString().replace(',', '.')) || 0;
+    const unidadVenta   = r[7] || '';
+    if (nombreProd) skuMap.set(nombreProd, { productoBase, cantidadVenta, unidadVenta });
+    if (productoBase && !baseUnitMap.has(productoBase)) baseUnitMap.set(productoBase, unidadVenta);
   });
 
-  // === 3) Ventas hoy (igual a tu lógica previa)
+  // === 2) Último inventario por Producto Base (Inv. Ayer)
+  const lastInvMap = new Map();
+  if (histSheet && histSheet.getLastRow() > 1) {
+    const histData = histSheet.getRange(2, 1, histSheet.getLastRow() - 1, 4).getValues();
+    histData.forEach(r => {
+      const ts = r[0];
+      const base = r[1];
+      const qty = parseFloat((r[2] || '0').toString().replace(',', '.'));
+      const realQty = parseFloat((r[3] || '').toString().replace(',', '.'));
+
+      if (!base || !(ts instanceof Date) || isNaN(ts.getTime())) return;
+
+      const currentQty = !isNaN(realQty) ? realQty : qty;
+      const prev = lastInvMap.get(base);
+      if (!prev || ts > prev.ts) {
+        lastInvMap.set(base, { ts, qty: currentQty });
+      }
+    });
+  }
+
+  // === 3) Ventas hoy
   const hoyStr = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
   const ordersData = ordersSheet.getRange(2, 1, Math.max(0, ordersSheet.getLastRow()-1), 11).getValues();
   const ventasPorBase = new Map();
-
   ordersData.forEach(r => {
-    const fecha = r[8];    // I
-    const nom   = r[9];    // J
-    const cant  = parseFloat(r[10]) || 0; // K
+    const fecha = r[8];
+    const nom   = r[9];
+    const cant  = parseFloat((r[10] || '0').toString().replace(',', '.')) || 0;
     if (!fecha || !nom) return;
-
-    // obtener YYYY-MM-DD robusto
-    let fechaDia = '';
-    if (fecha instanceof Date) {
-      fechaDia = Utilities.formatDate(fecha, TIMEZONE, 'yyyy-MM-dd');
-    } else {
-      fechaDia = (''+fecha).substring(0,10); // si vino como string
-    }
-    if (fechaDia !== hoyStr) return;
-
-    const info = skuMap.get(nom);
-    if (info && info.productoBase) {
-      const totalBase = cant * (info.cantidadVenta || 0);
-      ventasPorBase.set(info.productoBase, (ventasPorBase.get(info.productoBase) || 0) + totalBase);
+    let fechaDia = (fecha instanceof Date) ? Utilities.formatDate(fecha, TIMEZONE, 'yyyy-MM-dd') : (''+fecha).substring(0,10);
+    if (fechaDia === hoyStr) {
+      const info = skuMap.get(nom);
+      if (info && info.productoBase) {
+        const totalBase = cant * (info.cantidadVenta || 0);
+        ventasPorBase.set(info.productoBase, (ventasPorBase.get(info.productoBase) || 0) + totalBase);
+      }
     }
   });
 
-  // === 4) Compras hoy desde "Adquisiciones"
+  // === 4) Compras hoy
   const comprasPorBase = new Map();
-  const inconsistencias = new Map(); // base -> mensaje (primera inconsistencia encontrada)
-
-  if (adqSheet) {
-    const lastRow = adqSheet.getLastRow();
-    if (lastRow > 1) {
-      const idxBase   = indexByHeader(adqSheet, 'Producto Base');       // A o B según tu hoja
-      const idxCant   = indexByHeader(adqSheet, 'Cantidad a Comprar');  // B o C …
-      const idxForma  = indexByHeader(adqSheet, 'Formato de Compra');   // C o D …
-
-      if (idxBase !== -1 && idxCant !== -1 && idxForma !== -1) {
-        const adqData = adqSheet.getRange(2, 1, lastRow-1, adqSheet.getLastColumn()).getValues();
-
-        adqData.forEach(r => {
-          const base = r[idxBase];
-          const cantCompra = parseFloat(r[idxCant]) || 0;
-          const formato = r[idxForma];
-
-          if (!base || !cantCompra || !formato) return;
-
-          const dashUnit = baseUnitMap.get(base) || ''; // unidad del dashboard (SKU)
-          const parsed = parseFormatoCompra(formato);
-          const conv = convertAcquisitionToDashUnit(cantCompra, parsed, dashUnit);
-
-          if (conv.ok) {
-            comprasPorBase.set(base, (comprasPorBase.get(base) || 0) + conv.qty);
-          } else {
-            if (!inconsistencias.has(base)) {
-              inconsistencias.set(base, conv.reason || 'Inconsistencia de unidades');
-            }
+  const inconsistencias = new Map();
+  if (adqSheet && adqSheet.getLastRow() > 1) {
+    const idxBase   = indexByHeader(adqSheet, 'Producto Base');
+    const idxCant   = indexByHeader(adqSheet, 'Cantidad a Comprar');
+    const idxForma  = indexByHeader(adqSheet, 'Formato de Compra');
+    if (idxBase !== -1 && idxCant !== -1 && idxForma !== -1) {
+      const adqData = adqSheet.getRange(2, 1, adqSheet.getLastRow()-1, adqSheet.getLastColumn()).getValues();
+      adqData.forEach(r => {
+        const base = r[idxBase];
+        const cantCompra = parseFloat((r[idxCant] || '0').toString().replace(',', '.')) || 0;
+        const formato = r[idxForma];
+        if (!base || !cantCompra || !formato) return;
+        const dashUnit = baseUnitMap.get(base) || '';
+        const parsed = parseFormatoCompra(formato);
+        const conv = convertAcquisitionToDashUnit(cantCompra, parsed, dashUnit);
+        if (conv.ok) {
+          comprasPorBase.set(base, (comprasPorBase.get(base) || 0) + conv.qty);
+        } else {
+          if (!inconsistencias.has(base)) {
+            inconsistencias.set(base, conv.reason || 'Inconsistencia de unidades');
           }
-        });
-      }
+        }
+      });
     }
   }
 
   // === 5) Armar inventory[] para el Dashboard
   const inventory = [];
   baseUnitMap.forEach((unidad, base) => {
+    const lastInv = lastInvMap.get(base);
+    const lastInventory = lastInv ? lastInv.qty : 0;
     const sales    = ventasPorBase.get(base)   || 0;
     const purchases= comprasPorBase.get(base)  || 0;
-
     const errMsg = inconsistencias.get(base) || '';
-    const error  = !!errMsg; // si hubo inconsistencia, el front pinta rojo
+    const error  = !!errMsg;
 
     inventory.push({
       baseProduct:  base,
-      lastInventory: 0,    // (tu cálculo de "Inv. Ayer" ya lo tienes en otra parte si lo deseas integrar aquí)
+      lastInventory: lastInventory,
       purchases:    purchases,
       sales:        sales,
-      expectedStock: 0,    // lo calculas después (ayer + compras - ventas)
+      expectedStock: lastInventory + purchases - sales,
       unit:         unidad,
       error:        error,
       errorMsg:     errMsg
