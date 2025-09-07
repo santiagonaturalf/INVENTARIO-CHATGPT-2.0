@@ -35,7 +35,8 @@ const TIMEZONE = "America/Santiago";
 function onOpen() {
   SpreadsheetApp.getUi()
       .createMenu('Inventario 2.0')
-      .addItem('Abrir Dashboard', 'showDashboard')
+      .addItem('Abrir Dashboard (Antiguo)', 'showDashboard')
+      .addItem('Abrir Dashboard v3', 'showDashboardV3')
       .addSeparator()
       .addItem('1. Configurar Hojas y Fórmulas', 'setup')
       .addSeparator()
@@ -447,7 +448,7 @@ function obtenerOCrearHoja(ss, nombreHoja) {
  * Se ejecuta cuando un usuario visita la URL de la aplicación.
  */
 function doGet(e) {
-  return HtmlService.createHtmlOutputFromFile('dashboard')
+  return HtmlService.createHtmlOutputFromFile('dashboard.html')
       .setTitle('Dashboard de Inventario 2.0');
 }
 
@@ -455,11 +456,22 @@ function doGet(e) {
  * Lanza el dashboard en un diálogo modal (ventana emergente).
  */
 function showDashboard() {
-  const html = HtmlService.createHtmlOutputFromFile('dashboard')
+  const html = HtmlService.createHtmlOutputFromFile('dashboard.html')
       .setWidth(1200)
       .setHeight(700);
-  SpreadsheetApp.getUi().showModalDialog(html, 'Dashboard de Inventario');
+  SpreadsheetApp.getUi().showModalDialog(html, 'Dashboard de Inventario v2');
 }
+
+/**
+ * Lanza el dashboard v3 en un diálogo modal (ventana emergente).
+ */
+function showDashboardV3() {
+  const html = HtmlService.createHtmlOutputFromFile('dashboard_v3.html')
+      .setWidth(1200)
+      .setHeight(700);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Dashboard de Inventario v3');
+}
+
 
 // =========================
 // Helpers de normalización
