@@ -155,7 +155,6 @@
                 <table id="inventory-table">
                     <thead>
                         <tr>
-                            <th>Categoría</th>
                             <th>Producto Base</th>
                             <th>Inv. Ayer</th>
                             <th>Compras</th>
@@ -214,7 +213,7 @@
             const tbody = document.querySelector("#inventory-table tbody");
             tbody.innerHTML = "";
             if (!inventory || inventory.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No hay productos para inventariar.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No hay productos para inventariar.</td></tr>';
                 return;
             }
             inventory.forEach(item => {
@@ -223,7 +222,6 @@
 
                 const row = `
                     <tr class="${stockClass}" data-product-base="${item.baseProduct}">
-                        <td>${item.category}</td>
                         <td>${item.baseProduct}</td>
                         <td>${Number(item.lastInventory).toFixed(2)}</td>
                         <td>${Number(item.purchases).toFixed(2)}</td>
@@ -243,7 +241,7 @@
             const tr = table.getElementsByTagName("tr");
 
             for (let i = 1; i < tr.length; i++) { // Comienza en 1 para saltar el encabezado
-                const td = tr[i].getElementsByTagName("td")[1]; // Columna de "Producto Base"
+                const td = tr[i].getElementsByTagName("td")[0]; // Columna de "Producto Base" es ahora la primera (índice 0)
                 if (td) {
                     const txtValue = td.textContent || td.innerText;
                     if (txtValue.toUpperCase().indexOf(filter) > -1) {
