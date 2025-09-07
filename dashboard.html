@@ -145,6 +145,7 @@
     <div class="container">
         <!-- Panel principal -->
         <div id="inventory-panel">
+            <div id="mensaje" style="display:none; padding: 10px; margin-bottom: 15px; border-radius: 8px; background-color: #FFF0F0; color: #D8000C; border: 1px solid #FFDADA;"></div>
             <h2>Inventario del Día</h2>
 
             <!-- Tabla de inventario -->
@@ -169,37 +170,44 @@
 
             <!-- Botones -->
             <div id="footer-buttons" class="footer-buttons">
-                <button onclick="fetchData()" class="secondary-button">🔄 Actualizar Datos</button>
+                <button onclick="cargarDashboard()" class="secondary-button">🔄 Actualizar Datos</button>
                 <button onclick="saveInventory()" class="primary-button">💾 Guardar Inventario</button>
             </div>
         </div>
     </div>
 
     <script>
-        document.addEventListener("DOMContentLoaded", fetchData);
+        window.addEventListener('load', cargarDashboard);
 
-        function fetchData() {
-            setLoadingState(true, 'Actualizando...');
+        function cargarDashboard() {
+            setLoadingState(true);
             google.script.run
-                .withSuccessHandler(handleSuccess)
+                .withSuccessHandler(function (payload) {
+                    setLoadingState(false);
+                    try {
+                        if (!payload || payload.ok === false) {
+                            mostrarMensaje(payload?.msg || 'No se pudo cargar la data.');
+                            renderTabla([]); // evita “undefined”
+                            return;
+                        }
+                        renderTabla(payload.inventory || []);
+                    } catch (e) {
+                        mostrarMensaje('Error renderizando: ' + e.message);
+                    }
+                })
                 .withFailureHandler(handleError)
                 .getDashboardData();
         }
 
-        function handleSuccess(data) {
-            setLoadingState(false);
-            // The new function returns the inventory directly in the `inventory` property.
-            // The top-level object also contains `sales` and `acquisitions` which we ignore for now.
-            renderInventory(data.inventory);
+        function mostrarMensaje(msg) {
+            const box = document.getElementById('mensaje');
+            if (box) {
+                box.textContent = msg;
+                box.style.display = 'block';
+            }
         }
 
-        function handleError(error) {
-            setLoadingState(false);
-            console.error("Error:", error);
-            alert("Ocurrió un error al cargar los datos: " + error.message);
-        }
-
-        function renderInventory(inventory) {
+        function renderTabla(inventory) {
             const tbody = document.querySelector("#inventory-table tbody");
             tbody.innerHTML = "";
             if (!inventory || inventory.length === 0) {
@@ -207,7 +215,6 @@
                 return;
             }
             inventory.forEach(item => {
-                // The new function provides placeholder values (0) for most fields.
                 const stockClass = item.expectedStock <= 0 ? 'low-stock' : '';
                 const realStockValue = item.expectedStock;
 
@@ -226,7 +233,7 @@
         }
 
         function saveInventory() {
-            setLoadingState(true, 'Guardando...');
+            setLoadingState(true);
             const inventoryData = [];
             const rows = document.querySelectorAll("#inventory-table tbody tr");
 
@@ -256,27 +263,33 @@
         }
 
         function saveSuccess(response) {
+            setLoadingState(false);
             if (response.success) {
-                alert("Inventario guardado correctamente. Los datos se actualizarán.");
-                fetchData(); // Recargar los datos para reflejar los cambios
+                mostrarMensaje("Inventario guardado correctamente. Actualizando...");
+                setTimeout(cargarDashboard, 1000); // Recargar los datos para reflejar los cambios
             } else {
-                handleError(response);
+                handleError({ message: response.error });
             }
         }
 
-        function setLoadingState(isLoading, message = '') {
+        function handleError(err) {
+            setLoadingState(false);
+            mostrarMensaje('Error: ' + (err && err.message ? err.message : 'Ocurrió un error desconocido.'));
+        }
+
+        function setLoadingState(isLoading) {
             const buttons = document.querySelectorAll('.footer-buttons button');
             buttons.forEach(button => {
                 button.disabled = isLoading;
+                const updateButton = button.textContent.includes('Actualizar');
+                const saveButton = button.textContent.includes('Guardar');
+
                 if (isLoading) {
-                    button.dataset.originalText = button.textContent;
-                    if (button.textContent.includes("Guardar")) {
-                        button.textContent = message;
-                    } else if (button.textContent.includes("Actualizar")) {
-                        button.textContent = message;
-                    }
+                    if (updateButton) button.textContent = 'Actualizando...';
+                    if (saveButton) button.textContent = 'Guardando...';
                 } else {
-                    button.textContent = button.dataset.originalText;
+                    if (updateButton) button.textContent = '🔄 Actualizar Datos';
+                    if (saveButton) button.textContent = '💾 Guardar Inventario';
                 }
             });
         }
