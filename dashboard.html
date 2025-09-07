@@ -139,6 +139,8 @@
 
         .low-stock { background-color: #FFF0F0; }
         .negative-stock { background-color: #FFDADA; font-weight: bold; }
+        .error-row { background-color: #ffe5e5 !important; }
+        .error-row:hover { background-color: #ffdddd !important; }
     </style>
 </head>
 <body>
@@ -217,11 +219,14 @@
                 return;
             }
             inventory.forEach(item => {
-                const stockClass = item.expectedStock <= 0 ? 'low-stock' : '';
+                let stockClass = item.expectedStock <= 0 ? 'low-stock' : '';
+                if (item.error) {
+                    stockClass += ' error-row';
+                }
                 const realStockValue = item.expectedStock;
 
                 const row = `
-                    <tr class="${stockClass}" data-product-base="${item.baseProduct}">
+                    <tr class="${stockClass}" data-product-base="${item.baseProduct}" title="${item.errorMsg || ''}">
                         <td>${item.baseProduct}</td>
                         <td>${Number(item.lastInventory).toFixed(2)}</td>
                         <td>${Number(item.purchases).toFixed(2)}</td>

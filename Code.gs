@@ -454,164 +454,233 @@ function showDashboard() {
   SpreadsheetApp.getUi().showModalDialog(html, 'Dashboard de Inventario');
 }
 
-/***********************/
-/* HELPERS NUMÉRICOS   */
-/***********************/
-function _toNumber(v) {
-  if (typeof v === 'number') return v;
-  if (typeof v === 'string') {
-    // Soporta comas decimales "0,5"
-    const t = v.replace(',', '.').trim();
-    const n = parseFloat(t);
-    return isNaN(n) ? 0 : n;
-  }
-  return 0;
+// =========================
+// Helpers de normalización
+// =========================
+function normalizeUnit(uRaw) {
+  if (!uRaw) return '';
+  const u = ('' + uRaw).trim().toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[áä]/g,'a').replace(/[éë]/g,'e').replace(/[íï]/g,'i')
+    .replace(/[óö]/g,'o').replace(/[úü]/g,'u');
+
+  // equivalencias comunes
+  if (/(^| )kg(s)?($)/.test(u) || /(kilo|kilos)/.test(u)) return 'kg';
+  if (/^g(ramos)?$/.test(u) || /gramo(s)?/.test(u)) return 'g';
+  if (/^l(itro)?s?$/.test(u) || /litro(s)?/.test(u)) return 'lt';
+  if (/botella(s)?/.test(u)) return 'botella';
+  if (/bandeja(s)?/.test(u)) return 'bandeja';
+  if (/paquete(s)?/.test(u)) return 'paquete';
+  if (/malla(s)?/.test(u)) return 'malla';
+  if (/caja(s)?/.test(u)) return 'caja';
+  if (/unidad(es)?|unid/.test(u)) return 'unidad';
+  if (/trio/.test(u)) return 'trio';
+  if (/docena/.test(u)) return 'docena';
+  if (/envase/.test(u)) return 'envase';
+
+  return u; // devolver tal cual si no reconocimos
 }
 
-function _dayString(dateLike) {
-  // Devuelve 'yyyy-MM-dd' en America/Santiago a partir de Date o string (p.ej. '2025-09-02 19:53')
-  if (dateLike instanceof Date) {
-    return Utilities.formatDate(dateLike, TIMEZONE, 'yyyy-MM-dd');
+/**
+ * Parseo de "Formato de Compra".
+ * Ejemplos de entrada:
+ *  - "Kilo (1 Kg)"     -> {unit:'kg', qtyPerFormato: 1}
+ *  - "Paquete (4 Kg)"  -> {unit:'kg', qtyPerFormato: 4}
+ *  - "Caja (10 Unidad)"-> {unit:'unidad', qtyPerFormato: 10}
+ *  - "Malla (14 Kg)"   -> {unit:'kg', qtyPerFormato: 14}
+ */
+function parseFormatoCompra(formatoRaw) {
+  if (!formatoRaw) return { unit: '', qtyPerFormato: NaN, source: '' };
+  const txt = ('' + formatoRaw).trim();
+
+  // Intentar capturar "Algo (N Unidad)" o "Algo (N Kg)" etc.
+  const m = txt.match(/\(([\d.,]+)\s*([A-Za-zÁÉÍÓÚáéíóúñÑ]+)\s*\)/);
+  if (m) {
+    const qty = parseFloat(m[1].replace(',', '.'));
+    const insideUnit = normalizeUnit(m[2]);
+    return { unit: insideUnit, qtyPerFormato: qty, source: 'parentesis' };
   }
-  if (typeof dateLike === 'string') {
-    // normaliza 'YYYY-MM-DD HH:mm' -> 'YYYY-MM-DDTHH:mm'
-    const normalized = dateLike.replace(' ', 'T');
-    const d = new Date(normalized);
-    if (!isNaN(d.getTime())) {
-      return Utilities.formatDate(d, TIMEZONE, 'yyyy-MM-dd');
-    }
-    // fallback: toma sólo la parte de la fecha antes del espacio
-    return (dateLike.split(' ')[0] || '').trim();
-  }
-  return '';
+
+  // Si no hay paréntesis, intentar casos simples: "Kilo", "Unidad", etc.
+  const u = normalizeUnit(txt);
+  if (u) return { unit: u, qtyPerFormato: 1, source: 'simple' };
+
+  return { unit: '', qtyPerFormato: NaN, source: 'unknown' };
 }
 
-/********************************************/
-/* ULTIMO INVENTARIO POR PRODUCTO BASE (B,C) */
-/********************************************/
-function _mapUltimoInventario(preferirStockReal) {
-  // preferirStockReal=true => si hay Stock Real (D) válido, úsalo; si no, usa Cantidad (C)
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const hist = ss.getSheetByName(HOJA_HISTORICO);
-  const mapa = new Map();
-  if (!hist || hist.getLastRow() < 2) return mapa;
+/**
+ * Convierte una cantidad a la unidad de dashboard (unidad SKU) si es posible.
+ * - Si las unidades ya coinciden -> cantidad * qtyPerFormato
+ * - Si vienen en kg y piden kg -> cantidad * qtyPerFormato
+ * - Si vienen en "paquete (X Kg)" y dashboard es kg -> cantidad * X
+ * - Incompatibles (ej. kg -> unidad sin factor) => inconsistencia
+ */
+function convertAcquisitionToDashUnit(qtyCompra, parsedFormato, dashUnit) {
+  const dash = normalizeUnit(dashUnit);
+  const src = parsedFormato.unit; // ya normalizada
+  const factor = parsedFormato.qtyPerFormato;
 
-  const values = hist.getRange(2, 1, hist.getLastRow() - 1, 5).getValues();
-  // Estructura: [Timestamp(A), Producto Base(B), Cantidad(C), Stock Real(D), Unidad Venta(E)]
-  for (let i = 0; i < values.length; i++) {
-    const [ts, base, cant, stockReal, unidad] = values[i];
-    if (!base) continue;
-    const when = (ts instanceof Date) ? ts : new Date(ts);
-    if (isNaN(when.getTime())) continue;
-
-    const qty = (preferirStockReal && stockReal !== '' && !isNaN(_toNumber(stockReal)))
-      ? _toNumber(stockReal)
-      : _toNumber(cant);
-
-    const prev = mapa.get(base);
-    if (!prev || when > prev.ts) {
-      mapa.set(base, { ts: when, qty: qty, unit: unidad || '' });
-    }
+  // Conversión directa: misma unidad base
+  if (dash === src && !isNaN(factor)) {
+    return { qty: qtyCompra * factor, ok: true };
   }
-  return mapa;
+
+  // Caso más común: formato empaquetado que especifica kg y dashboard usa kg
+  if (src === 'kg' && dash === 'kg' && !isNaN(factor)) {
+    return { qty: qtyCompra * factor, ok: true };
+  }
+
+  // Otros equivalentes triviales (litros, unidad)
+  if (src === 'lt' && dash === 'lt' && !isNaN(factor)) {
+    return { qty: qtyCompra * factor, ok: true };
+  }
+  if (src === 'unidad' && dash === 'unidad' && !isNaN(factor)) {
+    return { qty: qtyCompra * factor, ok: true };
+  }
+
+  // Si el formato es "Caja (10 Unidad)" y dashboard es "unidad"
+  if (src === 'unidad' && dash === 'unidad' && !isNaN(factor)) {
+    return { qty: qtyCompra * factor, ok: true };
+  }
+
+  // Si el formato NO trae especificación dentro de paréntesis (factor)
+  if (isNaN(factor)) {
+    return { qty: NaN, ok: false, reason: `Formato de compra sin factor interpretable` };
+  }
+
+  // Unidades no compatibles / no cubiertas
+  return {
+    qty: NaN,
+    ok: false,
+    reason: `Unidad incompatible: formato "${src}" -> dashboard "${dash}"`
+  };
 }
 
-/********************************************/
-/* LOOKUPS DE SKU                           */
-/********************************************/
-function _buildSkuLookups() {
-  // Devuelve:
-  //  - baseInfoMap: Map(Producto Base -> { unit, category })
-  //  - skuByNombre: Map(Nombre Producto -> { productoBase, cantidadVenta, unidadVenta })
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sku = ss.getSheetByName(HOJA_SKU);
-  if (!sku || sku.getLastRow() < 2) return { baseInfoMap: new Map(), skuByNombre: new Map() };
-
-  // Tomamos A:H para cubrir: Nombre, Base, Categoria (F), Cantidad Venta(G), Unidad Venta(H)
-  const data = sku.getRange(2, 1, sku.getLastRow() - 1, 8).getValues();
-
-  const baseInfoMap = new Map();
-  const skuByNombre = new Map();
-
-  data.forEach(r => {
-    const nombreProducto = r[0] || '';       // A
-    const productoBase   = r[1] || '';       // B
-    const categoria      = r[5] || 'Sin Categoría'; // F
-    const cantidadVenta  = _toNumber(r[6]);  // G
-    const unidadVenta    = r[7] || '';       // H
-
-    if (productoBase && !baseInfoMap.has(productoBase)) {
-      baseInfoMap.set(productoBase, { unit: unidadVenta, category: categoria });
-    }
-    if (nombreProducto) {
-      skuByNombre.set(nombreProducto, { productoBase, cantidadVenta, unidadVenta });
-    }
-  });
-
-  return { baseInfoMap, skuByNombre };
+// Índice de columna por encabezado (robusto a cambios de orden)
+function indexByHeader(sheet, headerName) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => (''+h).trim());
+  const idx = headers.findIndex(h => h.toLowerCase() === (''+headerName).trim().toLowerCase());
+  return idx; // -1 si no existe
 }
 
-
-/********************************************/
-/* REEMPLAZA TU getDashboardData()          */
-/********************************************/
+// =====================================
+// getDashboardData CON COMPRAS INCLUIDO
+// =====================================
 function getDashboardData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const orders = ss.getSheetByName(HOJA_ORDERS);
-  if (!orders) throw new Error('No se encontró la hoja Orders.');
-  const { baseInfoMap, skuByNombre } = _buildSkuLookups();
+  const skuSheet       = ss.getSheetByName(HOJA_SKU);
+  const ordersSheet    = ss.getSheetByName(HOJA_ORDERS);
+  const adqSheet       = ss.getSheetByName(HOJA_ADQUISICIONES);
+  const histSheet      = ss.getSheetByName(HOJA_HISTORICO);
 
-  // 1) Último inventario por Producto Base (Inv. Ayer teórico)
-  const preferirStockReal = false;
-  const lastInvMap = _mapUltimoInventario(preferirStockReal);
+  if (!skuSheet || !ordersSheet) {
+    throw new Error('No se encontraron las hojas SKU u Orders.');
+  }
 
-  // 2) Ventas de Hoy (por Producto Base)
-  const hoy = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
-  const rows = orders.getLastRow() > 1 ? orders.getRange(2, 1, orders.getLastRow() - 1, 11).getValues() : [];
-  const ventasPorBase = new Map();
-
-  rows.forEach(r => {
-    const fecha    = r[8];
-    const skuName  = r[9];
-    const qtyVenta = _toNumber(r[10]);
-
-    if (!skuName || !qtyVenta) return;
-    if (_dayString(fecha) !== hoy) return;
-
-    const sku = skuByNombre.get(skuName);
-    if (!sku || !sku.productoBase) return;
-
-    const cantidadBase = qtyVenta * _toNumber(sku.cantidadVenta);
-    ventasPorBase.set(sku.productoBase, (ventasPorBase.get(sku.productoBase) || 0) + cantidadBase);
+  // === 1) Mapa SKU: Nombre Producto -> {productoBase, cantidadVenta, unidadVenta}
+  const skuData = skuSheet.getRange(2, 1, Math.max(0, skuSheet.getLastRow()-1), 8).getValues();
+  const skuMap = new Map();
+  const baseUnitMap = new Map();
+  skuData.forEach(r => {
+    const nombreProd = r[0];
+    const productoBase = r[1];
+    const cantidadVenta = parseFloat((r[6] || '0').toString().replace(',', '.')) || 0;
+    const unidadVenta   = r[7] || '';
+    if (nombreProd) skuMap.set(nombreProd, { productoBase, cantidadVenta, unidadVenta });
+    if (productoBase && !baseUnitMap.has(productoBase)) baseUnitMap.set(productoBase, unidadVenta);
   });
 
-  // 3) Ensamblar el arreglo para el dashboard
+  // === 2) Último inventario por Producto Base (Inv. Ayer)
+  const lastInvMap = new Map();
+  if (histSheet && histSheet.getLastRow() > 1) {
+    const histData = histSheet.getRange(2, 1, histSheet.getLastRow() - 1, 4).getValues();
+    histData.forEach(r => {
+      const ts = r[0];
+      const base = r[1];
+      const qty = parseFloat((r[2] || '0').toString().replace(',', '.'));
+      const realQty = parseFloat((r[3] || '').toString().replace(',', '.'));
+
+      if (!base || !(ts instanceof Date) || isNaN(ts.getTime())) return;
+
+      const currentQty = !isNaN(realQty) ? realQty : qty;
+      const prev = lastInvMap.get(base);
+      if (!prev || ts > prev.ts) {
+        lastInvMap.set(base, { ts, qty: currentQty });
+      }
+    });
+  }
+
+  // === 3) Ventas hoy
+  const hoyStr = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
+  const ordersData = ordersSheet.getRange(2, 1, Math.max(0, ordersSheet.getLastRow()-1), 11).getValues();
+  const ventasPorBase = new Map();
+  ordersData.forEach(r => {
+    const fecha = r[8];
+    const nom   = r[9];
+    const cant  = parseFloat((r[10] || '0').toString().replace(',', '.')) || 0;
+    if (!fecha || !nom) return;
+    let fechaDia = (fecha instanceof Date) ? Utilities.formatDate(fecha, TIMEZONE, 'yyyy-MM-dd') : (''+fecha).substring(0,10);
+    if (fechaDia === hoyStr) {
+      const info = skuMap.get(nom);
+      if (info && info.productoBase) {
+        const totalBase = cant * (info.cantidadVenta || 0);
+        ventasPorBase.set(info.productoBase, (ventasPorBase.get(info.productoBase) || 0) + totalBase);
+      }
+    }
+  });
+
+  // === 4) Compras hoy
+  const comprasPorBase = new Map();
+  const inconsistencias = new Map();
+  if (adqSheet && adqSheet.getLastRow() > 1) {
+    const idxBase   = indexByHeader(adqSheet, 'Producto Base');
+    const idxCant   = indexByHeader(adqSheet, 'Cantidad a Comprar');
+    const idxForma  = indexByHeader(adqSheet, 'Formato de Compra');
+    if (idxBase !== -1 && idxCant !== -1 && idxForma !== -1) {
+      const adqData = adqSheet.getRange(2, 1, adqSheet.getLastRow()-1, adqSheet.getLastColumn()).getValues();
+      adqData.forEach(r => {
+        const base = r[idxBase];
+        const cantCompra = parseFloat((r[idxCant] || '0').toString().replace(',', '.')) || 0;
+        const formato = r[idxForma];
+        if (!base || !cantCompra || !formato) return;
+        const dashUnit = baseUnitMap.get(base) || '';
+        const parsed = parseFormatoCompra(formato);
+        const conv = convertAcquisitionToDashUnit(cantCompra, parsed, dashUnit);
+        if (conv.ok) {
+          comprasPorBase.set(base, (comprasPorBase.get(base) || 0) + conv.qty);
+        } else {
+          if (!inconsistencias.has(base)) {
+            inconsistencias.set(base, conv.reason || 'Inconsistencia de unidades');
+          }
+        }
+      });
+    }
+  }
+
+  // === 5) Armar inventory[] para el Dashboard
   const inventory = [];
-  baseInfoMap.forEach(({ unit, category }, baseProduct) => {
-    const last = lastInvMap.get(baseProduct);
-    const invAyer = last ? _toNumber(last.qty) : 0;
-    const sales   = ventasPorBase.get(baseProduct) || 0;
+  baseUnitMap.forEach((unidad, base) => {
+    const lastInv = lastInvMap.get(base);
+    const lastInventory = lastInv ? lastInv.qty : 0;
+    const sales    = ventasPorBase.get(base)   || 0;
+    const purchases= comprasPorBase.get(base)  || 0;
+    const errMsg = inconsistencias.get(base) || '';
+    const error  = !!errMsg;
 
     inventory.push({
-      baseProduct: baseProduct,
-      category: category,
-      lastInventory: invAyer,
-      purchases: 0,
-      sales: sales,
-      expectedStock: invAyer - sales,
-      unit: unit || (last ? last.unit : '')
+      baseProduct:  base,
+      lastInventory: lastInventory,
+      purchases:    purchases,
+      sales:        sales,
+      expectedStock: lastInventory + purchases - sales,
+      unit:         unidad,
+      error:        error,
+      errorMsg:     errMsg
     });
   });
 
-  // Ordenar por categoría, y luego por nombre de producto
-  inventory.sort((a, b) => {
-    if (a.category < b.category) return -1;
-    if (a.category > b.category) return 1;
-    return a.baseProduct.localeCompare(b.baseProduct);
-  });
-
   return {
-    inventory: inventory,
+    inventory,
     sales: [],
     acquisitions: []
   };
