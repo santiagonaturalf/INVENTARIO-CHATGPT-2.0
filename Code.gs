@@ -649,6 +649,190 @@ function setEstadoProducto(baseProduct, estado, notas) {
   return {ok:true};
 }
 
+// =====================================================================================
+// LÓGICA DE CÁLCULO DE VENTAS (NUEVO)
+// =====================================================================================
+
+/***** CONFIG *****/
+const CFG = {
+  timezone: 'America/Santiago',
+  sheetOrders: 'Orders',
+  sheetSKU: 'SKU',
+  sheetVentasBase: 'VENTAS_BASE_HOY',
+  estadosPermitidos: ['Procesando', 'En Espera de Pago'], // ajustar si es necesario
+  // Encabezados esperados:
+  ORDERS_HEADERS: {
+    estado: 'Estado',
+    fecha: 'Fecha',
+    nombreProducto: 'Nombre Producto',
+    cantidad: 'Cantidad',
+  },
+  SKU_HEADERS: {
+    nombreProducto: 'Nombre Producto',
+    productoBase: 'Producto Base',
+    cantVenta: 'Cantidad Venta',
+    unidadVenta: 'Unidad Venta',
+  }
+};
+
+/***** HELPERS *****/
+const norm = s => (s ?? '').toString().trim().toLowerCase();
+
+function getHeaderIndexes_(headerRow, headerMap) {
+  const idx = {};
+  const mapKeys = Object.keys(headerMap);
+  mapKeys.forEach(k => {
+    const wanted = norm(headerMap[k]);
+    const pos = headerRow.findIndex(h => norm(h) === wanted);
+    if (pos === -1) throw new Error(`No se encontró la columna "${headerMap[k]}"`);
+    idx[k] = pos;
+  });
+  return idx;
+}
+
+function unitToKg_(unidadVenta) {
+  const u = norm(unidadVenta);
+  if (u === 'kilo' || u === 'kg') return 1;
+  if (u === 'gramo' || u === 'g' || u === 'gramos') return 0.001;
+  if (u === 'unidad' || u === 'unidades') return 1; // asumir factor ya está en Kg
+  throw new Error(`Unidad Venta no soportada: "${unidadVenta}"`);
+}
+
+function startOfToday_(tz) {
+  const now = new Date();
+  const str = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+  return new Date(`${str}T00:00:00`);
+}
+function startOfTomorrow_(tz) {
+  const t0 = startOfToday_(tz);
+  return new Date(t0.getTime() + 24*60*60*1000);
+}
+
+/***** CORE *****/
+function buildSkuMap_() {
+  const sh = SpreadsheetApp.getActive().getSheetByName(CFG.sheetSKU);
+  if (!sh) throw new Error(`No existe la hoja ${CFG.sheetSKU}`);
+  const values = sh.getDataRange().getValues();
+  if (values.length < 2) return {};
+
+  const hdr = values[0].map(String);
+  const H = getHeaderIndexes_(hdr, CFG.SKU_HEADERS);
+  const map = {};
+  const warnings = [];
+
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+    const name = norm(row[H.nombreProducto]);
+    const base = row[H.productoBase];
+    const fac  = row[H.cantVenta];
+    const uni  = row[H.unidadVenta];
+
+    if (!name || !base) continue;
+    if (map[name]) warnings.push(`Duplicado en SKU: ${row[H.nombreProducto]}`);
+
+    map[name] = {
+      base: base.toString().trim(),
+      factor: Number(fac) || 0,
+      unidad: uni
+    };
+  }
+
+  if (warnings.length) Logger.log(warnings.join('\n'));
+  return map;
+}
+
+function getVentasPorBase_EntreFechas_(fromDate, toDate, estadosPermitidos) {
+  const skuMap = buildSkuMap_();
+
+  const sh = SpreadsheetApp.getActive().getSheetByName(CFG.sheetOrders);
+  if (!sh) throw new Error(`No existe la hoja ${CFG.sheetOrders}`);
+  const values = sh.getDataRange().getValues();
+  if (values.length < 2) return { ventasPorBase:{}, missing:[] };
+
+  const hdr = values[0].map(String);
+  const H = getHeaderIndexes_(hdr, CFG.ORDERS_HEADERS);
+  const estadosOK = new Set(estadosPermitidos.map(norm));
+
+  const ventasPorBase = {};
+  const missing = [];
+  const badUnits = [];
+
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+
+    const estado = norm(row[H.estado]);
+    if (!estadosOK.has(estado)) continue;
+
+    const fechaRaw = row[H.fecha];
+    if (!fechaRaw) continue;
+    const fecha = (fechaRaw instanceof Date) ? fechaRaw : new Date(fechaRaw);
+    if (!(fecha instanceof Date) || isNaN(fecha)) continue;
+    if (!(fecha >= fromDate && fecha < toDate)) continue;
+
+    const nombre = norm(row[H.nombreProducto]);
+    const cantidad = Number(row[H.cantidad]) || 0;
+    if (!nombre || cantidad <= 0) continue;
+
+    const s = skuMap[nombre];
+    if (!s) { missing.push(row[H.nombreProducto]); continue; }
+
+    let mult;
+    try {
+      mult = unitToKg_(s.unidad);
+    } catch (e) {
+      badUnits.push(`${row[H.nombreProducto]} -> Unidad "${s.unidad}"`);
+      continue;
+    }
+
+    const kg = cantidad * (Number(s.factor) || 0) * mult;
+    const baseKey = norm(s.base);
+    if (!ventasPorBase[baseKey]) ventasPorBase[baseKey] = 0;
+    ventasPorBase[baseKey] += kg;
+  }
+
+  if (missing.length) Logger.log('SKU faltante para: \n' + Array.from(new Set(missing)).join('\n'));
+  if (badUnits.length) Logger.log('Unidad no soportada en: \n' + Array.from(new Set(badUnits)).join('\n'));
+
+  return { ventasPorBase, missing: Array.from(new Set(missing)) };
+}
+
+function getVentasPorBaseHoy_() {
+  const tz = CFG.timezone;
+  const from = startOfToday_(tz);
+  const to   = startOfTomorrow_(tz);
+  return getVentasPorBase_EntreFechas_(from, to, CFG.estadosPermitidos);
+}
+
+/***** OUTPUTS *****/
+function writeVentasBaseHoy() {
+  const ss = SpreadsheetApp.getActive();
+  const shOut = ss.getSheetByName(CFG.sheetVentasBase) || ss.insertSheet(CFG.sheetVentasBase);
+
+  // calcular
+  const { ventasPorBase } = getVentasPorBaseHoy_();
+
+  // volcar
+  shOut.clear();
+  const rows = [['Producto Base', 'Ventas Kg']];
+  Object.keys(ventasPorBase).sort().forEach(k => {
+    const baseOriginalCase = k; // normalizado; si necesitan el case original, guardar en skuMap
+    rows.push([baseOriginalCase, Number(ventasPorBase[k])]);
+  });
+  if (rows.length === 1) rows.push(['(sin ventas)', 0]);
+
+  shOut.getRange(1,1,rows.length,rows[0].length).setValues(rows);
+  shOut.autoResizeColumns(1, 2);
+}
+
+/***** INTEGRACIÓN CON EL DASHBOARD *****/
+// Si el Dashboard es HTML (HtmlService) y ya existe una función que arma los datos,
+// exportar esta función y sumarle "ventasKg" por Producto Base.
+function getVentasPorBaseHoy_JSON() {
+  const data = getVentasPorBaseHoy_().ventasPorBase;
+  // Devuelve: { 'acelga': 6, 'naranja': 27, ... }
+  return data;
+}
+
 // =====================================
 // getDashboardData CON COMPRAS INCLUIDO
 // =====================================
@@ -697,24 +881,9 @@ function getDashboardData() {
     });
   }
 
-  // === 3) Ventas hoy
-  const hoyStr = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
-  const ordersData = ordersSheet.getRange(2, 1, Math.max(0, ordersSheet.getLastRow()-1), 11).getValues();
-  const ventasPorBase = new Map();
-  ordersData.forEach(r => {
-    const fecha = r[8];
-    const nom   = r[9];
-    const cant  = parseFloat((r[10] || '0').toString().replace(',', '.')) || 0;
-    if (!fecha || !nom) return;
-    let fechaDia = (fecha instanceof Date) ? Utilities.formatDate(fecha, TIMEZONE, 'yyyy-MM-dd') : (''+fecha).substring(0,10);
-    if (fechaDia === hoyStr) {
-      const info = skuMap.get(nom);
-      if (info && info.productoBase) {
-        const totalBase = cant * (info.cantidadVenta || 0);
-        ventasPorBase.set(info.productoBase, (ventasPorBase.get(info.productoBase) || 0) + totalBase);
-      }
-    }
-  });
+  // === 3) Ventas hoy (Lógica nueva)
+  const ventasHoyData = getVentasPorBaseHoy_JSON(); // Llama a la nueva función
+  const ventasPorBase = new Map(Object.entries(ventasHoyData)); // Convierte el objeto a un Map para compatibilidad
 
   // === 4) Compras hoy
   const comprasPorBase = new Map();
