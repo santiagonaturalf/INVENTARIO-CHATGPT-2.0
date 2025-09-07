@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <base target="_top">
+    <style>
+        :root {
+            --primary-color: #4A90E2; /* A modern blue */
+            --secondary-color: #F5A623; /* A warm orange for highlights */
+            --background-color: #F7F9FC;
+            --font-color: #333;
+            --border-color: #EAEAEA;
+            --card-shadow: 0 4px 8px rgba(0, 0, 0, 0.05);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            background-color: var(--background-color);
+            color: var(--font-color);
+        }
+
+        .container {
+            padding: 20px;
+            max-width: 1200px;
+            margin: auto;
+        }
+
+        h2 {
+            color: var(--primary-color);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .summary-cards {
+            display: flex;
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .card {
+            background-color: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: var(--card-shadow);
+            flex-grow: 1;
+            text-align: center;
+        }
+
+        .card h3 {
+            margin: 0 0 10px 0;
+            font-size: 1em;
+            color: #555;
+        }
+
+        .card p {
+            margin: 0;
+            font-size: 2em;
+            font-weight: bold;
+            color: var(--primary-color);
+        }
+
+        .table-wrapper {
+            background-color: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: var(--card-shadow);
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            background-color: #F8F9FA;
+            font-weight: 600;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        tbody tr:hover {
+            background-color: #f5f5f5;
+        }
+
+        input[type="number"] {
+            width: 80px;
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .footer-buttons {
+            margin-top: 20px;
+            display: flex;
+            gap: 15px;
+            justify-content: flex-end;
+        }
+
+        button {
+            padding: 12px 20px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background-color 0.2s, transform 0.1s;
+        }
+
+        .primary-button {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .primary-button:hover {
+            background-color: #357ABD;
+        }
+
+        .secondary-button {
+            background-color: #EFEFEF;
+            color: #333;
+        }
+
+        .secondary-button:hover {
+            background-color: #DDD;
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        .low-stock { background-color: #FFF0F0; }
+        .negative-stock { background-color: #FFDADA; font-weight: bold; }
+        .error-row { background-color: #ffe5e5 !important; }
+        .error-row:hover { background-color: #ffdddd !important; }
+        .badge { padding:2px 6px; border-radius:10px; font-size:12px; }
+        .badge-ok { background:#e6ffed; color:#1a7f37; border:1px solid #b7ebc6; }
+        .badge-warn { background:#fff7e6; color:#ad6800; border:1px solid #ffe58f; }
+        .badge-neutral { background:#f0f0f0; color:#555; border:1px solid #d9d9d9; }
+        .num { text-align:right; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Panel principal -->
+        <div id="inventory-panel">
+            <div id="mensaje" style="display:none; padding: 10px; margin-bottom: 15px; border-radius: 8px; background-color: #FFF0F0; color: #D8000C; border: 1px solid #FFDADA;"></div>
+            <h2>Inventario del Día</h2>
+
+            <input type="text" id="searchInput" placeholder="Buscar por Producto Base..." style="width: 100%; padding: 10px; margin-bottom: 20px; border: 1px solid var(--border-color); border-radius: 6px;">
+
+            <div style="display:flex; gap:16px; align-items:center; margin:10px 0;">
+              <label><input type="checkbox" id="filterMovHoy"> Mostrar sólo con movimiento hoy</label>
+              <label><input type="checkbox" id="hideApproved" checked> Ocultar verificados/aprobados</label>
+              <small style="opacity:.7;">(Los verificados/aprobados aparecen si los buscas por nombre)</small>
+            </div>
+
+            <!-- Tabla de inventario -->
+            <div class="table-wrapper">
+                <table id="inventory-table">
+                    <thead>
+                        <tr>
+                            <th>Producto Base</th>
+                            <th>Inv. Ayer</th>
+                            <th>Compras</th>
+                            <th>Ventas</th>
+                            <th>Inv. Hoy</th>
+                            <th>Unidad</th>
+                            <th>Estado</th>
+                            <th>Stock Real</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tablaInventarioBody">
+                        <!-- Los datos se insertarán aquí con JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Botones -->
+            <div id="footer-buttons" class="footer-buttons">
+                <button class="secondary-button">🔄 Actualizar Datos</button>
+                <button class="primary-button">💾 Guardar Inventario</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let dashboardData = null; // { inventory, estados, ... }
+        let estadosMap = {}; // { baseProduct: 'pendiente'|'verificando'|'aprobado' }
+
+        window.addEventListener('load', () => {
+            document.getElementById('filterMovHoy')?.addEventListener('change', renderInventoryTable);
+            document.getElementById('hideApproved')?.addEventListener('change', renderInventoryTable);
+            document.getElementById('searchInput')?.addEventListener('input', renderInventoryTable);
+            document.querySelector('.secondary-button').addEventListener('click', cargarDatosDashboard);
+            document.querySelector('.primary-button').addEventListener('click', saveInventory);
+            cargarDatosDashboard();
+        });
+
+        function cargarDatosDashboard() {
+            setLoadingState(true);
+            google.script.run
+                .withSuccessHandler(function(payload) {
+                    setLoadingState(false);
+                    try {
+                        if (!payload || !payload.inventory) {
+                            mostrarMensaje(payload?.msg || 'No se pudo cargar la data.');
+                            dashboardData = { inventory: [], estados: {} };
+                            estadosMap = {};
+                        } else {
+                            dashboardData = payload;
+                            estadosMap = payload.estados || {};
+                        }
+                        renderInventoryTable();
+                    } catch (e) {
+                        mostrarMensaje('Error renderizando: ' + e.message);
+                    }
+                })
+                .withFailureHandler(handleError)
+                .getDashboardData();
+        }
+
+        function getSearchText() {
+            const el = document.getElementById('searchInput');
+            return (el && el.value ? el.value.trim().toLowerCase() : '');
+        }
+
+        function getDatosFiltrados() {
+            if (!dashboardData?.inventory) return [];
+            const onlyMov = document.getElementById('filterMovHoy')?.checked;
+            const hideApproved = document.getElementById('hideApproved')?.checked;
+            const q = getSearchText();
+            return dashboardData.inventory.filter(item => {
+                const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
+                if (onlyMov && !(Number(item.sales) > 0 || Number(item.purchases) > 0)) return false;
+                const isApproved = (estado === 'verificando' || estado === 'aprobado');
+                if (hideApproved && isApproved) {
+                    if (!q) return false;
+                    const match = item.baseProduct.toLowerCase().includes(q);
+                    if (!match) return false;
+                }
+                if (q && !item.baseProduct.toLowerCase().includes(q)) return false;
+                return true;
+            });
+        }
+
+        function estadoBadgeClass(estado) {
+            switch ((estado || '').toLowerCase()) {
+                case 'verificando':
+                    return 'badge badge-warn';
+                case 'aprobado':
+                    return 'badge badge-ok';
+                default:
+                    return 'badge badge-neutral';
+            }
+        }
+
+        function renderInventoryTable() {
+            const tbody = document.getElementById('tablaInventarioBody');
+            tbody.innerHTML = '';
+            const rows = getDatosFiltrados();
+            if (rows.length === 0) {
+                const columnCount = 8;
+                tbody.innerHTML = `<tr><td colspan="${columnCount}" style="text-align:center;">No hay productos que coincidan con los filtros.</td></tr>`;
+                return;
+            }
+            rows.forEach(item => {
+                const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
+                const tr = document.createElement('tr');
+                if (item.error) {
+                    tr.classList.add('error-row');
+                    tr.title = item.errorMsg || 'Inconsistencia detectada';
+                }
+                if (item.expectedStock <= 0) {
+                    tr.classList.add('low-stock');
+                }
+                tr.dataset.productBase = item.baseProduct;
+                tr.innerHTML = `
+                    <td>${item.baseProduct}</td>
+                    <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
+                    <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
+                    <td class="num">${Number(item.sales||0).toFixed(2)}</td>
+                    <td class="num"><strong>${Number(item.expectedStock||0).toFixed(2)}</strong></td>
+                    <td>${item.unit || ''}</td>
+                    <td>
+                      <span class="${estadoBadgeClass(estado)}" style="margin-right:6px;">${estado}</span>
+                      <select data-base="${item.baseProduct}">
+                        <option value="pendiente"   ${estado==='pendiente'?'selected':''}>Pendiente</option>
+                        <option value="verificando" ${estado==='verificando'?'selected':''}>Verificando</option>
+                        <option value="aprobado"    ${estado==='aprobado'?'selected':''}>Aprobado</option>
+                      </select>
+                    </td>
+                    <td><input type="number" step="0.01" class="real-stock-input" value="${Number(item.expectedStock).toFixed(2)}"/></td>
+                `;
+                tbody.appendChild(tr);
+            });
+            tbody.querySelectorAll('select[data-base]').forEach(sel => {
+                sel.addEventListener('change', function() {
+                    const base = this.getAttribute('data-base');
+                    const estado = this.value;
+                    google.script.run.withSuccessHandler(() => {
+                        estadosMap[base] = estado;
+                        renderInventoryTable();
+                    }).withFailureHandler(err => {
+                        alert('No se pudo actualizar el estado: ' + (err.message || err));
+                        this.value = estadosMap[base] || 'pendiente';
+                    }).setEstadoProducto(base, estado, '');
+                });
+            });
+        }
+
+        function saveInventory() {
+            setLoadingState(true);
+            const inventoryData = [];
+            const rows = document.querySelectorAll("#tablaInventarioBody tr");
+            rows.forEach(row => {
+                const productBase = row.dataset.productBase;
+                if (productBase) {
+                    const input = row.querySelector(".real-stock-input");
+                    const quantity = input.value;
+                    if (quantity !== "" && !isNaN(quantity)) {
+                        inventoryData.push({
+                            productoBase: productBase,
+                            cantidad: parseFloat(quantity)
+                        });
+                    }
+                }
+            });
+            if (inventoryData.length > 0) {
+                google.script.run
+                    .withSuccessHandler(saveSuccess)
+                    .withFailureHandler(handleError)
+                    .saveRealInventory(inventoryData);
+            } else {
+                setLoadingState(false);
+                alert("No hay datos de inventario para guardar.");
+            }
+        }
+
+        function saveSuccess(response) {
+            setLoadingState(false);
+            if (response.success) {
+                mostrarMensaje("Inventario guardado correctamente. Actualizando...");
+                setTimeout(cargarDatosDashboard, 1000);
+            } else {
+                handleError({
+                    message: response.error
+                });
+            }
+        }
+
+        function handleError(err) {
+            setLoadingState(false);
+            mostrarMensaje('Error: ' + (err && err.message ? err.message : 'Ocurrió un error desconocido.'));
+        }
+
+        function mostrarMensaje(msg) {
+            const box = document.getElementById('mensaje');
+            if (box) {
+                box.textContent = msg;
+                box.style.display = 'block';
+            }
+        }
+
+        function setLoadingState(isLoading) {
+            const buttons = document.querySelectorAll('.footer-buttons button');
+            buttons.forEach(button => {
+                button.disabled = isLoading;
+                const updateButton = button.textContent.includes('Actualizar');
+                const saveButton = button.textContent.includes('Guardar');
+                if (isLoading) {
+                    if (updateButton) button.textContent = 'Actualizando...';
+                    if (saveButton) button.textContent = 'Guardando...';
+                } else {
+                    if (updateButton) button.textContent = '🔄 Actualizar Datos';
+                    if (saveButton) button.textContent = '💾 Guardar Inventario';
+                }
+            });
+        }
+    </script>
+</body>
+</html>
