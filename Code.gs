@@ -454,62 +454,160 @@ function showDashboard() {
   SpreadsheetApp.getUi().showModalDialog(html, 'Dashboard de Inventario');
 }
 
-/**
- * Devuelve todos los productos base registrados en la hoja SKU para mostrarlos en el dashboard,
- * aunque todavía no tengan datos de inventario.
- *
- * Estructura de la hoja SKU (columnas relevantes):
- *   A: Nombre Producto
- *   B: Producto Base
- *   C: Formato Adquisición
- *   D: Cantidad Adquisición
- *   E: Unidad Adquisición
- *   F: Categoría
- *   G: Cantidad Venta
- *   H: Unidad Venta
- *
- * @returns {Object} Un objeto con:
- *   - inventory: arreglo con cada producto base y valores iniciales en cero
- *   - sales: []
- *   - acquisitions: []
- */
-function getDashboardData() {
+/***********************/
+/* HELPERS NUMÉRICOS   */
+/***********************/
+function _toNumber(v) {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    // Soporta comas decimales "0,5"
+    const t = v.replace(',', '.').trim();
+    const n = parseFloat(t);
+    return isNaN(n) ? 0 : n;
+  }
+  return 0;
+}
+
+function _dayString(dateLike) {
+  // Devuelve 'yyyy-MM-dd' en America/Santiago a partir de Date o string (p.ej. '2025-09-02 19:53')
+  if (dateLike instanceof Date) {
+    return Utilities.formatDate(dateLike, TIMEZONE, 'yyyy-MM-dd');
+  }
+  if (typeof dateLike === 'string') {
+    // normaliza 'YYYY-MM-DD HH:mm' -> 'YYYY-MM-DDTHH:mm'
+    const normalized = dateLike.replace(' ', 'T');
+    const d = new Date(normalized);
+    if (!isNaN(d.getTime())) {
+      return Utilities.formatDate(d, TIMEZONE, 'yyyy-MM-dd');
+    }
+    // fallback: toma sólo la parte de la fecha antes del espacio
+    return (dateLike.split(' ')[0] || '').trim();
+  }
+  return '';
+}
+
+/********************************************/
+/* ULTIMO INVENTARIO POR PRODUCTO BASE (B,C) */
+/********************************************/
+function _mapUltimoInventario(preferirStockReal) {
+  // preferirStockReal=true => si hay Stock Real (D) válido, úsalo; si no, usa Cantidad (C)
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const skuSheet = ss.getSheetByName(HOJA_SKU);
-  if (!skuSheet) {
-    throw new Error('No se encontró la hoja "SKU". Verifica el nombre de la hoja.');
+  const hist = ss.getSheetByName(HOJA_HISTORICO);
+  const mapa = new Map();
+  if (!hist || hist.getLastRow() < 2) return mapa;
+
+  const values = hist.getRange(2, 1, hist.getLastRow() - 1, 5).getValues();
+  // Estructura: [Timestamp(A), Producto Base(B), Cantidad(C), Stock Real(D), Unidad Venta(E)]
+  for (let i = 0; i < values.length; i++) {
+    const [ts, base, cant, stockReal, unidad] = values[i];
+    if (!base) continue;
+    const when = (ts instanceof Date) ? ts : new Date(ts);
+    if (isNaN(when.getTime())) continue;
+
+    const qty = (preferirStockReal && stockReal !== '' && !isNaN(_toNumber(stockReal)))
+      ? _toNumber(stockReal)
+      : _toNumber(cant);
+
+    const prev = mapa.get(base);
+    if (!prev || when > prev.ts) {
+      mapa.set(base, { ts: when, qty: qty, unit: unidad || '' });
+    }
   }
+  return mapa;
+}
 
-  const lastRow = skuSheet.getLastRow();
-  if (lastRow < 2) {
-    return { inventory: [], sales: [], acquisitions: [] };
-  }
+/********************************************/
+/* LOOKUPS DE SKU                           */
+/********************************************/
+function _buildSkuLookups() {
+  // Devuelve:
+  //  - baseInfoMap: Map(Producto Base -> { unit, category })
+  //  - skuByNombre: Map(Nombre Producto -> { productoBase, cantidadVenta, unidadVenta })
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sku = ss.getSheetByName(HOJA_SKU);
+  if (!sku || sku.getLastRow() < 2) return { baseInfoMap: new Map(), skuByNombre: new Map() };
 
-  // Leer columnas de la hoja SKU: B (Producto Base) y H (Unidad Venta)
-  const data = skuSheet.getRange(2, 2, lastRow - 1, 7).getValues();
-  // data = matriz de filas, cada fila = [Producto Base, Formato Adq, Cantidad Adq, Unidad Adq, Categoría, Cantidad Venta, Unidad Venta]
+  // Tomamos A:H para cubrir: Nombre, Base, Categoria (F), Cantidad Venta(G), Unidad Venta(H)
+  const data = sku.getRange(2, 1, sku.getLastRow() - 1, 8).getValues();
 
-  // Construir un map único por producto base para no duplicar
-  const uniqueBases = new Map();
-  data.forEach(row => {
-    const productoBase = row[0];
-    const unidadVenta = row[6] || ''; // Columna H (índice 6) es Unidad Venta
-    if (productoBase && !uniqueBases.has(productoBase)) {
-      uniqueBases.set(productoBase, unidadVenta);
+  const baseInfoMap = new Map();
+  const skuByNombre = new Map();
+
+  data.forEach(r => {
+    const nombreProducto = r[0] || '';       // A
+    const productoBase   = r[1] || '';       // B
+    const categoria      = r[5] || 'Sin Categoría'; // F
+    const cantidadVenta  = _toNumber(r[6]);  // G
+    const unidadVenta    = r[7] || '';       // H
+
+    if (productoBase && !baseInfoMap.has(productoBase)) {
+      baseInfoMap.set(productoBase, { unit: unidadVenta, category: categoria });
+    }
+    if (nombreProducto) {
+      skuByNombre.set(nombreProducto, { productoBase, cantidadVenta, unidadVenta });
     }
   });
 
-  // Crear el arreglo de inventario con valores iniciales en 0
+  return { baseInfoMap, skuByNombre };
+}
+
+
+/********************************************/
+/* REEMPLAZA TU getDashboardData()          */
+/********************************************/
+function getDashboardData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const orders = ss.getSheetByName(HOJA_ORDERS);
+  if (!orders) throw new Error('No se encontró la hoja Orders.');
+  const { baseInfoMap, skuByNombre } = _buildSkuLookups();
+
+  // 1) Último inventario por Producto Base (Inv. Ayer teórico)
+  const preferirStockReal = false;
+  const lastInvMap = _mapUltimoInventario(preferirStockReal);
+
+  // 2) Ventas de Hoy (por Producto Base)
+  const hoy = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
+  const rows = orders.getLastRow() > 1 ? orders.getRange(2, 1, orders.getLastRow() - 1, 11).getValues() : [];
+  const ventasPorBase = new Map();
+
+  rows.forEach(r => {
+    const fecha    = r[8];
+    const skuName  = r[9];
+    const qtyVenta = _toNumber(r[10]);
+
+    if (!skuName || !qtyVenta) return;
+    if (_dayString(fecha) !== hoy) return;
+
+    const sku = skuByNombre.get(skuName);
+    if (!sku || !sku.productoBase) return;
+
+    const cantidadBase = qtyVenta * _toNumber(sku.cantidadVenta);
+    ventasPorBase.set(sku.productoBase, (ventasPorBase.get(sku.productoBase) || 0) + cantidadBase);
+  });
+
+  // 3) Ensamblar el arreglo para el dashboard
   const inventory = [];
-  uniqueBases.forEach((unidad, producto) => {
+  baseInfoMap.forEach(({ unit, category }, baseProduct) => {
+    const last = lastInvMap.get(baseProduct);
+    const invAyer = last ? _toNumber(last.qty) : 0;
+    const sales   = ventasPorBase.get(baseProduct) || 0;
+
     inventory.push({
-      baseProduct: producto,
-      lastInventory: 0,
+      baseProduct: baseProduct,
+      category: category,
+      lastInventory: invAyer,
       purchases: 0,
-      sales: 0,
-      expectedStock: 0,
-      unit: unidad
+      sales: sales,
+      expectedStock: invAyer - sales,
+      unit: unit || (last ? last.unit : '')
     });
+  });
+
+  // Ordenar por categoría, y luego por nombre de producto
+  inventory.sort((a, b) => {
+    if (a.category < b.category) return -1;
+    if (a.category > b.category) return 1;
+    return a.baseProduct.localeCompare(b.baseProduct);
   });
 
   return {
@@ -517,6 +615,14 @@ function getDashboardData() {
     sales: [],
     acquisitions: []
   };
+}
+
+/***********************************************************/
+/* OPCIONAL: “VLOOKUP del último” para una sola clave      */
+/***********************************************************/
+function lookupUltimoInventarioCantidad(productoBase) {
+  const m = _mapUltimoInventario(false); // false: usa SIEMPRE Cantidad(C)
+  return m.get(productoBase)?.qty || 0;
 }
 
 /**
