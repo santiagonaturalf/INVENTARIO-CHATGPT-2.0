@@ -99,6 +99,13 @@ function setup() {
     hojaDiscrepancias.getRange(1, 1, 1, encabezadosDiscrepancias.length).setValues([encabezadosDiscrepancias]).setFontWeight("bold");
   }
 
+  // Hoja Estados (persistencia de verificación/aprobación)
+  const hojaEstados = obtenerOCrearHoja(ss, 'Estados');
+  const headers = ['Producto Base','Estado','Notas','Usuario','Timestamp'];
+  if (hojaEstados.getRange(1,1,1,headers.length).isBlank()) {
+    hojaEstados.getRange(1,1,1,headers.length).setValues([headers]).setFontWeight('bold');
+  }
+
   SpreadsheetApp.getUi().alert("¡Configuración completada! Las hojas han sido creadas y configuradas.");
 }
 
@@ -563,6 +570,73 @@ function indexByHeader(sheet, headerName) {
   return idx; // -1 si no existe
 }
 
+/**
+ * Devuelve un Map<string, string> de estados por producto base.
+ * Estados posibles: 'pendiente' (por defecto), 'verificando', 'aprobado'
+ */
+function getEstadosProductos_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName('Estados');
+  if (!sh || sh.getLastRow() < 2) return new Map();
+  const rows = sh.getRange(2,1, sh.getLastRow()-1, 5).getValues();
+  const map = new Map();
+  rows.forEach(([base, estado]) => {
+    if (base) map.set(base, (estado || 'pendiente').toString().toLowerCase());
+  });
+  return map;
+}
+
+/** Devuelve los estados como objeto { [baseProduct]: estado } para el dashboard. */
+function getEstadosParaUI() {
+  const m = getEstadosProductos_();
+  const obj = {};
+  m.forEach((v,k)=> obj[k]=v);
+  return obj;
+}
+
+/**
+ * Actualiza el estado de un producto base.
+ * @param {string} baseProduct
+ * @param {'pendiente'|'verificando'|'aprobado'} estado
+ * @param {string=} notas
+ */
+function setEstadoProducto(baseProduct, estado, notas) {
+  if (!baseProduct) throw new Error('Producto Base vacío.');
+  estado = (estado || 'pendiente').toLowerCase();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName('Estados') || ss.insertSheet('Estados');
+
+  // Asegurar headers
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1,1,1,5).setValues([['Producto Base','Estado','Notas','Usuario','Timestamp']]);
+  }
+
+  // Buscar si ya existe
+  const lastRow = sh.getLastRow();
+  if (lastRow >= 2) {
+    const data = sh.getRange(2,1,lastRow-1,5).getValues();
+    for (let i=0;i<data.length;i++){
+      if ((data[i][0]||'').toString().trim().toLowerCase() === baseProduct.toString().trim().toLowerCase()){
+        sh.getRange(i+2,2).setValue(estado);
+        if (notas !== undefined) sh.getRange(i+2,3).setValue(notas);
+        sh.getRange(i+2,4).setValue(Session.getActiveUser().getEmail() || 'Sistema');
+        sh.getRange(i+2,5).setValue(new Date());
+        return {ok:true};
+      }
+    }
+  }
+
+  // Insertar nueva fila
+  sh.appendRow([
+    baseProduct,
+    estado,
+    notas || '',
+    Session.getActiveUser().getEmail() || 'Sistema',
+    new Date()
+  ]);
+  return {ok:true};
+}
+
 // =====================================
 // getDashboardData CON COMPRAS INCLUIDO
 // =====================================
@@ -680,10 +754,12 @@ function getDashboardData() {
     });
   });
 
+  const estados = getEstadosParaUI(); // <-- NUEVO
   return {
-    inventory,
+    inventory: inventory,
     sales: [],
-    acquisitions: []
+    acquisitions: [],
+    estados: estados // <-- NUEVO
   };
 }
 
