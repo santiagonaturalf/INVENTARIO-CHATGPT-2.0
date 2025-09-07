@@ -141,6 +141,11 @@
         .negative-stock { background-color: #FFDADA; font-weight: bold; }
         .error-row { background-color: #ffe5e5 !important; }
         .error-row:hover { background-color: #ffdddd !important; }
+        .badge { padding:2px 6px; border-radius:10px; font-size:12px; }
+        .badge-ok { background:#e6ffed; color:#1a7f37; border:1px solid #b7ebc6; }
+        .badge-warn { background:#fff7e6; color:#ad6800; border:1px solid #ffe58f; }
+        .badge-neutral { background:#f0f0f0; color:#555; border:1px solid #d9d9d9; }
+        .num { text-align:right; }
     </style>
 </head>
 <body>
@@ -150,7 +155,13 @@
             <div id="mensaje" style="display:none; padding: 10px; margin-bottom: 15px; border-radius: 8px; background-color: #FFF0F0; color: #D8000C; border: 1px solid #FFDADA;"></div>
             <h2>Inventario del Día</h2>
 
-            <input type="text" id="search-input" onkeyup="filterTable()" placeholder="Buscar por Producto Base..." style="width: 100%; padding: 10px; margin-bottom: 20px; border: 1px solid var(--border-color); border-radius: 6px;">
+            <input type="text" id="searchInput" placeholder="Buscar por Producto Base..." style="width: 100%; padding: 10px; margin-bottom: 20px; border: 1px solid var(--border-color); border-radius: 6px;">
+
+            <div style="display:flex; gap:16px; align-items:center; margin:10px 0;">
+              <label><input type="checkbox" id="filterMovHoy"> Mostrar sólo con movimiento hoy</label>
+              <label><input type="checkbox" id="hideApproved" checked> Ocultar verificados/aprobados</label>
+              <small style="opacity:.7;">(Los verificados/aprobados aparecen si los buscas por nombre)</small>
+            </div>
 
             <!-- Tabla de inventario -->
             <div class="table-wrapper">
@@ -163,10 +174,11 @@
                             <th>Ventas</th>
                             <th>Inv. Hoy</th>
                             <th>Unidad</th>
+                            <th>Estado</th>
                             <th>Stock Real</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="tablaInventarioBody">
                         <!-- Los datos se insertarán aquí con JavaScript -->
                     </tbody>
                 </table>
@@ -174,27 +186,40 @@
 
             <!-- Botones -->
             <div id="footer-buttons" class="footer-buttons">
-                <button onclick="cargarDashboard()" class="secondary-button">🔄 Actualizar Datos</button>
-                <button onclick="saveInventory()" class="primary-button">💾 Guardar Inventario</button>
+                <button class="secondary-button">🔄 Actualizar Datos</button>
+                <button class="primary-button">💾 Guardar Inventario</button>
             </div>
         </div>
     </div>
 
     <script>
-        window.addEventListener('load', cargarDashboard);
+        let dashboardData = null; // { inventory, estados, ... }
+        let estadosMap = {}; // { baseProduct: 'pendiente'|'verificando'|'aprobado' }
 
-        function cargarDashboard() {
+        window.addEventListener('load', () => {
+            document.getElementById('filterMovHoy')?.addEventListener('change', renderInventoryTable);
+            document.getElementById('hideApproved')?.addEventListener('change', renderInventoryTable);
+            document.getElementById('searchInput')?.addEventListener('input', renderInventoryTable);
+            document.querySelector('.secondary-button').addEventListener('click', cargarDatosDashboard);
+            document.querySelector('.primary-button').addEventListener('click', saveInventory);
+            cargarDatosDashboard();
+        });
+
+        function cargarDatosDashboard() {
             setLoadingState(true);
             google.script.run
-                .withSuccessHandler(function (payload) {
+                .withSuccessHandler(function(payload) {
                     setLoadingState(false);
                     try {
                         if (!payload || !payload.inventory) {
                             mostrarMensaje(payload?.msg || 'No se pudo cargar la data.');
-                            renderTabla([]);
-                            return;
+                            dashboardData = { inventory: [], estados: {} };
+                            estadosMap = {};
+                        } else {
+                            dashboardData = payload;
+                            estadosMap = payload.estados || {};
                         }
-                        renderTabla(payload.inventory);
+                        renderInventoryTable();
                     } catch (e) {
                         mostrarMensaje('Error renderizando: ' + e.message);
                     }
@@ -203,66 +228,99 @@
                 .getDashboardData();
         }
 
-        function mostrarMensaje(msg) {
-            const box = document.getElementById('mensaje');
-            if (box) {
-                box.textContent = msg;
-                box.style.display = 'block';
-            }
+        function getSearchText() {
+            const el = document.getElementById('searchInput');
+            return (el && el.value ? el.value.trim().toLowerCase() : '');
         }
 
-        function renderTabla(inventory) {
-            const tbody = document.querySelector("#inventory-table tbody");
-            tbody.innerHTML = "";
-            if (!inventory || inventory.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No hay productos para inventariar.</td></tr>';
-                return;
-            }
-            inventory.forEach(item => {
-                let stockClass = item.expectedStock <= 0 ? 'low-stock' : '';
-                if (item.error) {
-                    stockClass += ' error-row';
+        function getDatosFiltrados() {
+            if (!dashboardData?.inventory) return [];
+            const onlyMov = document.getElementById('filterMovHoy')?.checked;
+            const hideApproved = document.getElementById('hideApproved')?.checked;
+            const q = getSearchText();
+            return dashboardData.inventory.filter(item => {
+                const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
+                if (onlyMov && !(Number(item.sales) > 0 || Number(item.purchases) > 0)) return false;
+                const isApproved = (estado === 'verificando' || estado === 'aprobado');
+                if (hideApproved && isApproved) {
+                    if (!q) return false;
+                    const match = item.baseProduct.toLowerCase().includes(q);
+                    if (!match) return false;
                 }
-                const realStockValue = item.expectedStock;
-
-                const row = `
-                    <tr class="${stockClass}" data-product-base="${item.baseProduct}" title="${item.errorMsg || ''}">
-                        <td>${item.baseProduct}</td>
-                        <td>${Number(item.lastInventory).toFixed(2)}</td>
-                        <td>${Number(item.purchases).toFixed(2)}</td>
-                        <td>${Number(item.sales).toFixed(2)}</td>
-                        <td><strong>${Number(item.expectedStock).toFixed(2)}</strong></td>
-                        <td>${item.unit}</td>
-                        <td><input type="number" step="any" class="real-stock-input" value="${realStockValue.toFixed(2)}"></td>
-                    </tr>`;
-                tbody.innerHTML += row;
+                if (q && !item.baseProduct.toLowerCase().includes(q)) return false;
+                return true;
             });
         }
 
-        function filterTable() {
-            const input = document.getElementById("search-input");
-            const filter = input.value.toUpperCase();
-            const table = document.getElementById("inventory-table");
-            const tr = table.getElementsByTagName("tr");
-
-            for (let i = 1; i < tr.length; i++) { // Comienza en 1 para saltar el encabezado
-                const td = tr[i].getElementsByTagName("td")[0]; // Columna de "Producto Base" es ahora la primera (índice 0)
-                if (td) {
-                    const txtValue = td.textContent || td.innerText;
-                    if (txtValue.toUpperCase().indexOf(filter) > -1) {
-                        tr[i].style.display = "";
-                    } else {
-                        tr[i].style.display = "none";
-                    }
-                }
+        function estadoBadgeClass(estado) {
+            switch ((estado || '').toLowerCase()) {
+                case 'verificando':
+                    return 'badge badge-warn';
+                case 'aprobado':
+                    return 'badge badge-ok';
+                default:
+                    return 'badge badge-neutral';
             }
+        }
+
+        function renderInventoryTable() {
+            const tbody = document.getElementById('tablaInventarioBody');
+            tbody.innerHTML = '';
+            const rows = getDatosFiltrados();
+            if (rows.length === 0) {
+                const columnCount = 8;
+                tbody.innerHTML = `<tr><td colspan="${columnCount}" style="text-align:center;">No hay productos que coincidan con los filtros.</td></tr>`;
+                return;
+            }
+            rows.forEach(item => {
+                const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
+                const tr = document.createElement('tr');
+                if (item.error) {
+                    tr.classList.add('error-row');
+                    tr.title = item.errorMsg || 'Inconsistencia detectada';
+                }
+                if (item.expectedStock <= 0) {
+                    tr.classList.add('low-stock');
+                }
+                tr.dataset.productBase = item.baseProduct;
+                tr.innerHTML = `
+                    <td>${item.baseProduct}</td>
+                    <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
+                    <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
+                    <td class="num">${Number(item.sales||0).toFixed(2)}</td>
+                    <td class="num"><strong>${Number(item.expectedStock||0).toFixed(2)}</strong></td>
+                    <td>${item.unit || ''}</td>
+                    <td>
+                      <span class="${estadoBadgeClass(estado)}" style="margin-right:6px;">${estado}</span>
+                      <select data-base="${item.baseProduct}">
+                        <option value="pendiente"   ${estado==='pendiente'?'selected':''}>Pendiente</option>
+                        <option value="verificando" ${estado==='verificando'?'selected':''}>Verificando</option>
+                        <option value="aprobado"    ${estado==='aprobado'?'selected':''}>Aprobado</option>
+                      </select>
+                    </td>
+                    <td><input type="number" step="0.01" class="real-stock-input" value="${Number(item.expectedStock).toFixed(2)}"/></td>
+                `;
+                tbody.appendChild(tr);
+            });
+            tbody.querySelectorAll('select[data-base]').forEach(sel => {
+                sel.addEventListener('change', function() {
+                    const base = this.getAttribute('data-base');
+                    const estado = this.value;
+                    google.script.run.withSuccessHandler(() => {
+                        estadosMap[base] = estado;
+                        renderInventoryTable();
+                    }).withFailureHandler(err => {
+                        alert('No se pudo actualizar el estado: ' + (err.message || err));
+                        this.value = estadosMap[base] || 'pendiente';
+                    }).setEstadoProducto(base, estado, '');
+                });
+            });
         }
 
         function saveInventory() {
             setLoadingState(true);
             const inventoryData = [];
-            const rows = document.querySelectorAll("#inventory-table tbody tr");
-
+            const rows = document.querySelectorAll("#tablaInventarioBody tr");
             rows.forEach(row => {
                 const productBase = row.dataset.productBase;
                 if (productBase) {
@@ -276,7 +334,6 @@
                     }
                 }
             });
-
             if (inventoryData.length > 0) {
                 google.script.run
                     .withSuccessHandler(saveSuccess)
@@ -292,9 +349,11 @@
             setLoadingState(false);
             if (response.success) {
                 mostrarMensaje("Inventario guardado correctamente. Actualizando...");
-                setTimeout(cargarDashboard, 1000);
+                setTimeout(cargarDatosDashboard, 1000);
             } else {
-                handleError({ message: response.error });
+                handleError({
+                    message: response.error
+                });
             }
         }
 
@@ -303,13 +362,20 @@
             mostrarMensaje('Error: ' + (err && err.message ? err.message : 'Ocurrió un error desconocido.'));
         }
 
+        function mostrarMensaje(msg) {
+            const box = document.getElementById('mensaje');
+            if (box) {
+                box.textContent = msg;
+                box.style.display = 'block';
+            }
+        }
+
         function setLoadingState(isLoading) {
             const buttons = document.querySelectorAll('.footer-buttons button');
             buttons.forEach(button => {
                 button.disabled = isLoading;
                 const updateButton = button.textContent.includes('Actualizar');
                 const saveButton = button.textContent.includes('Guardar');
-
                 if (isLoading) {
                     if (updateButton) button.textContent = 'Actualizando...';
                     if (saveButton) button.textContent = 'Guardando...';
