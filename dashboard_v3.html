@@ -292,27 +292,41 @@
                     <td>${item.unit || ''}</td>
                     <td>
                       <span class="${estadoBadgeClass(estado)}" style="margin-right:6px;">${estado}</span>
-                      <select data-base="${item.baseProduct}">
-                        <option value="pendiente"   ${estado==='pendiente'?'selected':''}>Pendiente</option>
-                        <option value="verificando" ${estado==='verificando'?'selected':''}>Verificando</option>
-                        <option value="aprobado"    ${estado==='aprobado'?'selected':''}>Aprobado</option>
-                      </select>
+                      <input type="checkbox" class="approval-checkbox" data-base="${item.baseProduct}" ${estado === 'aprobado' ? 'checked' : ''} style="vertical-align: middle;">
                     </td>
                     <td><input type="number" step="0.01" class="real-stock-input" value="${Number(item.expectedStock).toFixed(2)}"/></td>
                 `;
                 tbody.appendChild(tr);
             });
-            tbody.querySelectorAll('select[data-base]').forEach(sel => {
-                sel.addEventListener('change', function() {
+
+            tbody.querySelectorAll('.approval-checkbox').forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
                     const base = this.getAttribute('data-base');
-                    const estado = this.value;
-                    google.script.run.withSuccessHandler(() => {
-                        estadosMap[base] = estado;
-                        renderInventoryTable();
-                    }).withFailureHandler(err => {
-                        alert('No se pudo actualizar el estado: ' + (err.message || err));
-                        this.value = estadosMap[base] || 'pendiente';
-                    }).setEstadoProducto(base, estado, '');
+                    const nuevoEstado = this.checked ? 'aprobado' : 'pendiente';
+
+                    const oldState = estadosMap[base] || 'pendiente';
+                    estadosMap[base] = nuevoEstado;
+
+                    // Actualizar visualmente la fila de inmediato (optimistic update)
+                    const badge = this.parentElement.querySelector('span');
+                    if (badge) {
+                        badge.textContent = nuevoEstado;
+                        badge.className = estadoBadgeClass(nuevoEstado);
+                    }
+
+                    google.script.run
+                        .withSuccessHandler(() => {
+                            // La UI ya está casi bien, pero un re-render asegura consistencia
+                            // si la lógica de filtrado depende del estado.
+                            renderInventoryTable();
+                        })
+                        .withFailureHandler(err => {
+                            // Revertir en caso de error
+                            estadosMap[base] = oldState;
+                            alert('No se pudo actualizar el estado: ' + (err.message || err));
+                            renderInventoryTable(); // Re-render para mostrar el estado original
+                        })
+                        .setEstadoProducto(base, nuevoEstado, '');
                 });
             });
         }
