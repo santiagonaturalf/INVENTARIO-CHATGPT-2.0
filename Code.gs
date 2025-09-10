@@ -1170,9 +1170,6 @@ function saveRealInventory(inventoryData) {
       hojaDiscrepancias.getRange(hojaDiscrepancias.getLastRow() + 1, 1, discrepanciasNuevas.length, 5).setValues(discrepanciasNuevas);
     }
 
-    // Forzar un recálculo para que el "Inventario Ayer" del próximo ciclo sea el real
-    calcularInventarioDiario();
-
     return { success: true, message: "Inventario real guardado correctamente." };
 
   } catch (e) {
