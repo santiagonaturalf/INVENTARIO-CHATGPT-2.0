@@ -81,7 +81,7 @@ function setup() {
 
   // --- 4. Hoja de Inventario Histórico ---
   const hojaHistorico = obtenerOCrearHoja(ss, HOJA_HISTORICO);
-  const encabezadosHistorico = ["Timestamp", "Producto Base", "Cantidad", "Stock Real", "Unidad Venta"];
+  const encabezadosHistorico = ["Timestamp", "Producto Base", "Stock Real", "Unidad Venta"];
   // Solo escribir encabezados si la fila 1 está vacía
   if (hojaHistorico.getRange("A1").getValue() === "") {
       hojaHistorico.getRange(1, 1, 1, encabezadosHistorico.length).setValues([encabezadosHistorico]).setFontWeight("bold");
@@ -89,7 +89,7 @@ function setup() {
 
   // --- 5. Hoja de Reporte Hoy ---
   const hojaReporte = obtenerOCrearHoja(ss, HOJA_REPORTE_HOY);
-  const encabezadosReporte = ["Producto Base", "Inventario Ayer", "Compras del Día", "Ventas del Día", "Inventario Hoy", "Stock Real"];
+  const encabezadosReporte = ["Producto Base", "Inventario Ayer", "Compras del Día", "Ventas del Día", "Inventario Hoy", "Stock Real", "Discrepancias"];
   if (hojaReporte.getRange("A1").getValue() === "") {
     hojaReporte.getRange(1, 1, 1, encabezadosReporte.length).setValues([encabezadosReporte]).setFontWeight("bold");
   }
@@ -233,15 +233,8 @@ function calcularInventarioDiario() {
         const fila = datosHistorico[i];
         const productoBase = fila[1];
         if (!productosVistos.has(productoBase)) {
-            const stockReal = parseFloat(fila[3]); // Columna D: Stock Real
-            const cantidadCalculada = parseFloat(fila[2]); // Columna C: Cantidad (estimada)
-
-            // Priorizar el stock real si existe y es un número válido
-            if (!isNaN(stockReal) && fila[3] !== '') {
-                inventarioAyer[productoBase] = stockReal;
-            } else {
-                inventarioAyer[productoBase] = cantidadCalculada || 0;
-            }
+            const stockReal = parseFloat(fila[2]); // Columna C es "Stock Real" en la nueva estructura
+            inventarioAyer[productoBase] = stockReal || 0;
             productosVistos.add(productoBase);
         }
     }
@@ -269,27 +262,18 @@ function calcularInventarioDiario() {
         "" // Stock Real (editable por el usuario)
       ]);
 
-      nuevoHistorico.push([
-        timestamp,
-        producto,
-        hoy,
-        "", // Stock Real
-        skuInfo.unidadVenta || 'N/A'
-      ]);
     });
 
     // --- 7. ESCRIBIR RESULTADOS EN LAS HOJAS ---
     // Limpiar reporte anterior y escribir el nuevo
     if (hojaReporteHoy.getLastRow() > 1) {
-      hojaReporteHoy.getRange(2, 1, hojaReporteHoy.getLastRow() - 1, 6).clearContent();
+      hojaReporteHoy.getRange(2, 1, hojaReporteHoy.getLastRow() - 1, 7).clearContent();
     }
     if (reporteHoy.length > 0) {
       hojaReporteHoy.getRange(2, 1, reporteHoy.length, 6).setValues(reporteHoy);
-    }
-
-    // Añadir al histórico
-    if (nuevoHistorico.length > 0) {
-      hojaHistorico.getRange(hojaHistorico.getLastRow() + 1, 1, nuevoHistorico.length, 5).setValues(nuevoHistorico);
+      // Añadir fórmula de discrepancia en la columna G
+      const formulaRange = hojaReporteHoy.getRange(2, 7, reporteHoy.length);
+      formulaRange.setFormulaR1C1('=IF(RC[-1]<>"", RC[-1]-RC[-2], "")');
     }
 
     ui.showModalDialog(HtmlService.createHtmlOutput('<h3>¡Éxito!</h3><p>El cálculo del inventario ha finalizado.</p>'), 'Proceso Completado');
@@ -1014,17 +998,20 @@ function getDashboardData() {
     throw new Error('No se encontraron las hojas SKU u Orders.');
   }
 
-  // === 1) Mapa SKU: Nombre Producto -> {productoBase, cantidadVenta, unidadVenta}
+  // === 1) Mapa SKU: {productoBase, cantidadVenta, unidadVenta, categoria}
   const skuData = skuSheet.getRange(2, 1, Math.max(0, skuSheet.getLastRow()-1), 8).getValues();
   const skuMap = new Map();
-  const baseUnitMap = new Map();
+  const baseInfoMap = new Map(); // Unifica la info por producto base
   skuData.forEach(r => {
-    const nombreProd = r[0];
-    const productoBase = r[1];
+    const nombreProd = r[0]; // Col A
+    const productoBase = r[1]; // Col B
+    const categoria = r[5]; // Col F
     const cantidadVenta = parseFloat((r[6] || '0').toString().replace(',', '.')) || 0;
     const unidadVenta   = r[7] || '';
     if (nombreProd) skuMap.set(nombreProd, { productoBase, cantidadVenta, unidadVenta });
-    if (productoBase && !baseUnitMap.has(productoBase)) baseUnitMap.set(productoBase, unidadVenta);
+    if (productoBase && !baseInfoMap.has(productoBase)) {
+      baseInfoMap.set(productoBase, { unit: unidadVenta, category: categoria });
+    }
   });
 
   // === 2) Último inventario por Producto Base (Inv. Ayer)
@@ -1076,7 +1063,7 @@ function getDashboardData() {
 
   // === 5) Armar inventory[] para el Dashboard
   const inventory = [];
-  baseUnitMap.forEach((unidad, base) => {
+  baseInfoMap.forEach((info, base) => {
     const lastInv = lastInvMap.get(base);
     const lastInventory = lastInv ? lastInv.qty : 0;
     const sales    = ventasPorBase.get(base)   || 0;
@@ -1088,7 +1075,8 @@ function getDashboardData() {
       purchases:    purchases,
       sales:        sales,
       expectedStock: lastInventory + purchases - sales,
-      unit:         unidad,
+      unit:         info.unit || '',
+      category:     info.category || '',
       error:        false,
       errorMsg:     ""
     });
@@ -1103,80 +1091,103 @@ function getDashboardData() {
   };
 }
 
+function saveStockUpdates(updates) {
+  if (!updates || !Array.isArray(updates) || updates.length === 0) {
+    return { success: false, error: "No se proporcionaron datos para actualizar." };
+  }
 
-/**
- * Guarda el inventario real introducido por el usuario.
- * @param {Array<Object>} inventoryData Un array de objetos, cada uno con {productoBase, cantidad}.
- */
-function saveRealInventory(inventoryData) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const hojaReporte = ss.getSheetByName(HOJA_REPORTE_HOY);
     const hojaDiscrepancias = ss.getSheetByName("Discrepancias");
     const hojaHistorico = ss.getSheetByName(HOJA_HISTORICO);
+    const hojaSku = ss.getSheetByName(HOJA_SKU);
 
-    const datosReporte = hojaReporte.getRange("A2:F" + hojaReporte.getLastRow()).getValues();
-    const reporteMap = new Map(datosReporte.map(row => [row[0], row])); // Map by Producto Base
+    // Get all data once for efficiency
+    const reporteData = hojaReporte.getDataRange().getValues();
+    const histData = hojaHistorico.getDataRange().getValues();
+    const skuData = hojaSku.getRange(2, 1, hojaSku.getLastRow() - 1, 8).getValues();
 
-    const datosHistorico = hojaHistorico.getRange("A2:E" + hojaHistorico.getLastRow()).getValues();
+    // Create maps for quick lookups
+    const reporteMap = new Map(reporteData.map((row, i) => [row[0], { row: row, rowIndex: i + 1 }]));
+    const skuUnitMap = new Map(skuData.map(row => [row[1], row[7]]));
 
-    const discrepanciasNuevas = [];
-    const timestamp = new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    inventoryData.forEach(item => {
-      const productoBase = item.productoBase;
-      const cantidadReal = parseFloat(item.cantidad);
+    let successCount = 0;
+    const errors = [];
 
-      if (!isNaN(cantidadReal) && reporteMap.has(productoBase)) {
-        const filaReporte = reporteMap.get(productoBase);
-        const inventarioEstimado = parseFloat(filaReporte[4]); // Columna E: Inventario Hoy
-        const discrepancia = cantidadReal - inventarioEstimado;
+    // Sort historical data once to find oldest records later
+    const histMap = new Map();
+    for (let i = 1; i < histData.length; i++) {
+        const base = histData[i][1];
+        if (!histMap.has(base)) histMap.set(base, []);
+        histMap.get(base).push({ rowIndex: i + 1, timestamp: new Date(histData[i][0]) });
+    }
+    histMap.forEach(entries => entries.sort((a, b) => a.timestamp - b.timestamp));
 
-        // 1. Log en Hoja Discrepancias
-        discrepanciasNuevas.push([
-          timestamp,
-          productoBase,
-          inventarioEstimado,
-          cantidadReal,
-          discrepancia
-        ]);
+    const rowsToDelete = new Set();
 
-        // 2. Actualizar Stock Real en Hoja Reporte Hoy
-        // Encontrar la fila correcta y actualizar solo la columna F (Stock Real)
-        for (let i = 0; i < datosReporte.length; i++) {
-          if (datosReporte[i][0] === productoBase) {
-            hojaReporte.getRange(i + 2, 6).setValue(cantidadReal); // Fila i+2, Columna 6
-            break;
+    updates.forEach(update => {
+      let { productBase, quantity, state } = update;
+
+      try {
+        // Clamp quantity to 0 on the backend as a safeguard
+        if (quantity !== null && quantity < 0) {
+          quantity = 0;
+        }
+
+        // 1. Set product state
+        if (state) {
+          setEstadoProducto(productBase, state, 'Actualizado desde dashboard');
+        }
+
+        // 2. Update Reporte Hoy & log discrepancy
+        const reporteInfo = reporteMap.get(productBase);
+        if (!reporteInfo) throw new Error(`Producto no encontrado en 'Reporte Hoy'.`);
+
+        hojaReporte.getRange(reporteInfo.rowIndex, 6).setValue(quantity); // Col F is Stock Real
+        const inventarioEstimado = parseFloat(reporteInfo.row[4]);
+        if (hojaDiscrepancias) {
+          hojaDiscrepancias.appendRow([new Date(), productBase, inventarioEstimado, quantity, quantity - inventarioEstimado]);
+        }
+
+        // 3. Update Inventario Histórico
+        const productEntries = histMap.get(productBase) || [];
+        const sameDayEntry = productEntries.find(entry => {
+            const entryDate = new Date(entry.timestamp);
+            entryDate.setHours(0, 0, 0, 0);
+            return entryDate.getTime() === today.getTime();
+        });
+
+        if (sameDayEntry) {
+          hojaHistorico.getRange(sameDayEntry.rowIndex, 3).setValue(quantity); // Col C is Stock Real
+        } else {
+          if (productEntries.length >= 5) {
+            rowsToDelete.add(productEntries[0].rowIndex);
           }
+          const unit = skuUnitMap.get(productBase) || '';
+          hojaHistorico.appendRow([new Date(), productBase, quantity, unit]);
         }
-
-        // 3. Actualizar Stock Real en la última entrada del Histórico para ese producto
-        // Esto es crucial para que el cálculo del día siguiente sea correcto.
-        let ultimaFilaProducto = -1;
-        for (let i = datosHistorico.length - 1; i >= 0; i--) {
-          if (datosHistorico[i][1] === productoBase) {
-             ultimaFilaProducto = i;
-             break;
-          }
-        }
-        if(ultimaFilaProducto !== -1) {
-            // La columna D (4) es 'Stock Real' en Histórico
-            hojaHistorico.getRange(ultimaFilaProducto + 2, 4).setValue(cantidadReal);
-        }
+        successCount++;
+      } catch (e) {
+        errors.push(`Error con ${productBase}: ${e.message}`);
       }
     });
 
-    if (discrepanciasNuevas.length > 0) {
-      hojaDiscrepancias.getRange(hojaDiscrepancias.getLastRow() + 1, 1, discrepanciasNuevas.length, 5).setValues(discrepanciasNuevas);
+    // Delete rows in reverse order to avoid index shifts
+    Array.from(rowsToDelete).sort((a, b) => b - a).forEach(rowIndex => {
+      hojaHistorico.deleteRow(rowIndex);
+    });
+
+    if (errors.length > 0) {
+      throw new Error(errors.join('; '));
     }
 
-    // Forzar un recálculo para que el "Inventario Ayer" del próximo ciclo sea el real
-    calcularInventarioDiario();
-
-    return { success: true, message: "Inventario real guardado correctamente." };
-
+    return { success: true, message: `${successCount} productos actualizados.` };
   } catch (e) {
-    Logger.log(e);
+    Logger.log(e.stack);
     return { success: false, error: e.message };
   }
 }
