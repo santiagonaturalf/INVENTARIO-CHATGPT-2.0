@@ -36,15 +36,6 @@ function onOpen() {
   SpreadsheetApp.getUi()
       .createMenu('Inventario 2.0')
       .addItem('Abrir Dashboard', 'showDashboard')
-      .addSeparator()
-      .addItem('1. Configurar Hojas y Fórmulas', 'setup')
-      .addItem('Enriquecer Datos de Orders', 'completarSKUenOrders')
-      .addSeparator()
-      .addItem('2. Calcular Inventario de Hoy (Manual)', 'calcularInventarioDiario')
-      .addSeparator()
-      .addItem('3. Activar/Actualizar Trigger Diario', 'crearDisparadorDiario')
-      .addSeparator()
-      .addItem('Crear Historico', 'crearInventarioHistoricoDePrueba')
       .addToUi();
 }
 
@@ -383,107 +374,6 @@ function completarSKUenOrders() {
     SpreadsheetApp.getUi().alert(`Proceso completado. Se encontraron ${faltantes.size} productos sin mapeo en SKU. Revisa la hoja 'SKU_FALTANTES'.`);
   } else {
     SpreadsheetApp.getUi().alert('Proceso de enriquecimiento completado exitosamente.');
-  }
-}
-
-
-// =====================================================================================
-// FUNCIONES DE PRUEBA Y CONFIGURACIÓN
-// =====================================================================================
-
-/**
- * Crea un inventario histórico de prueba para los productos base de la hoja SKU.
- * Borra el histórico existente y genera nuevas entradas con fechas aleatorias
- * en los últimos 7 días y cantidades iniciales aleatorias.
- * Esta función es útil para la configuración inicial y pruebas.
- */
-function crearInventarioHistoricoDePrueba() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const ui = SpreadsheetApp.getUi();
-
-  const respuesta = ui.alert(
-    'Confirmación',
-    'Esta acción borrará TODOS los datos existentes en la hoja "Inventario Histórico" y los reemplazará con datos de prueba. ¿Desea continuar?',
-    ui.ButtonSet.YES_NO
-  );
-
-  if (respuesta !== ui.Button.YES) {
-    ui.alert('Operación cancelada por el usuario.');
-    return;
-  }
-
-  try {
-    const modalTitle = 'Generando Histórico de Prueba';
-    ui.showModalDialog(HtmlService.createHtmlOutput('<h3>Procesando...</h3><p>Generando el inventario histórico de prueba. Por favor, espere.</p>'), modalTitle);
-
-    const hojaSku = ss.getSheetByName(HOJA_SKU);
-    const hojaHistorico = ss.getSheetByName(HOJA_HISTORICO);
-
-    if (!hojaSku || !hojaHistorico) {
-      throw new Error(`No se encontraron las hojas "${HOJA_SKU}" o "${HOJA_HISTORICO}". Ejecute la configuración "1. Configurar Hojas y Fórmulas" primero.`);
-    }
-
-    // 1. Obtener productos base únicos de la hoja SKU
-    const datosSku = hojaSku.getRange("B2:H" + hojaSku.getLastRow()).getValues();
-    const productosBaseUnicos = new Map(); // Usar un Map para obtener productos únicos y su unidad de venta
-    datosSku.forEach(fila => {
-      const productoBase = fila[0]; // Columna B
-      const unidadVenta = fila[6];   // Columna H
-      if (productoBase && productoBase.trim() !== "" && !productosBaseUnicos.has(productoBase)) {
-        productosBaseUnicos.set(productoBase, unidadVenta || 'N/A');
-      }
-    });
-
-    if (productosBaseUnicos.size === 0) {
-        throw new Error(`No se encontraron "Producto Base" en la hoja "${HOJA_SKU}". Asegúrese de que los datos estén cargados.`);
-    }
-
-    // 2. Preparar datos históricos
-    const datosNuevosHistorico = [];
-    // Usar la fecha fija del 5 de septiembre de 2025 como "hoy" para consistencia
-    const hoy = new Date("2025-09-05T12:00:00");
-    const sieteDiasMs = 7 * 24 * 60 * 60 * 1000;
-
-    productosBaseUnicos.forEach((unidad, producto) => {
-      // Generar una fecha aleatoria en los últimos 7 días desde "hoy"
-      const timestampAleatorio = new Date(hoy.getTime() - Math.random() * sieteDiasMs);
-
-      // Generar una cantidad de stock inicial aleatoria (ej. entre 50 y 200)
-      const cantidadInicial = Math.floor(Math.random() * 151) + 50;
-
-      datosNuevosHistorico.push([
-        timestampAleatorio,
-        producto,
-        cantidadInicial,
-        '', // Stock Real se deja vacío
-        unidad // Unidad de Venta
-      ]);
-    });
-
-    // Ordenar por fecha para que el histórico tenga sentido cronológico
-    datosNuevosHistorico.sort((a, b) => a[0] - b[0]);
-
-    // 3. Escribir en la hoja Histórico
-    // Limpiar datos antiguos (manteniendo el encabezado)
-    if (hojaHistorico.getLastRow() > 1) {
-      hojaHistorico.getRange(2, 1, hojaHistorico.getLastRow() - 1, 5).clearContent();
-    }
-
-    // Escribir los nuevos datos
-    if (datosNuevosHistorico.length > 0) {
-      hojaHistorico.getRange(2, 1, datosNuevosHistorico.length, 5).setValues(datosNuevosHistorico);
-    }
-
-    // Cerrar diálogo y mostrar éxito
-    const successHtml = HtmlService.createHtmlOutput('<h3>¡Éxito!</h3><p>Se ha generado el inventario histórico de prueba correctamente.</p><p>Cerrando en 3 segundos...</p><script>setTimeout(function(){ google.script.host.close(); }, 3000);</script>')
-      .setWidth(400).setHeight(150);
-    ui.showModalDialog(successHtml, modalTitle);
-
-  } catch (e) {
-    Logger.log(e);
-    const errorHtml = HtmlService.createHtmlOutput(`<style>p{font-family:sans-serif;}</style><h3>Error</h3><p>${e.message}</p>`)
-      .setWidth(400).setHeight(150);
-    ui.showModalDialog(errorHtml, 'Error en el Proceso');
   }
 }
 
