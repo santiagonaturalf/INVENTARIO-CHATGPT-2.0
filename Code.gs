@@ -36,13 +36,6 @@ function onOpen() {
   SpreadsheetApp.getUi()
       .createMenu('Inventario 2.0')
       .addItem('Abrir Dashboard', 'showDashboard')
-      .addSeparator()
-      .addItem('1. Configurar Hojas y Fórmulas', 'setup')
-      .addItem('Enriquecer Datos de Orders', 'completarSKUenOrders')
-      .addSeparator()
-      .addItem('2. Calcular Inventario de Hoy (Manual)', 'calcularInventarioDiario')
-      .addSeparator()
-      .addItem('3. Activar/Actualizar Trigger Diario', 'crearDisparadorDiario')
       .addToUi();
 }
 
