@@ -350,6 +350,11 @@
                             this.checked = false;
                             return;
                         }
+                        if (quantity < 0) {
+                            alert('El Stock Real no puede ser negativo.');
+                            this.checked = false;
+                            return;
+                        }
                         handleItemSave([{ productBase: base, quantity: quantity, state: 'aprobado' }]);
                     } else {
                         handleItemSave([{ productBase: base, quantity: null, state: 'pendiente' }]);
@@ -365,6 +370,12 @@
                     if (estadosMap[base] === 'aprobado') {
                         const quantity = parseFloat(this.value);
                         if(isNaN(quantity)) { return; }
+                        if (quantity < 0) {
+                            alert('El Stock Real no puede ser negativo.');
+                            // Re-render to revert the input value if needed, or manually revert
+                            renderInventoryTable();
+                            return;
+                        }
                         handleItemSave([{ productBase: base, quantity: quantity, state: null }]);
                     }
                 });
@@ -399,6 +410,8 @@
                     const quantity = parseFloat(input.value);
                     if (isNaN(quantity)) {
                         alert(`El producto "${base}" tiene un valor de stock no válido y será omitido.`);
+                    } else if (quantity < 0) {
+                        alert(`El producto "${base}" tiene un stock real negativo (${quantity}) y será omitido.`);
                     } else {
                         updates.push({ productBase: base, quantity: quantity, state: 'aprobado' });
                     }

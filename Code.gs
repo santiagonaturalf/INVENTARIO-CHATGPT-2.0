@@ -1130,9 +1130,14 @@ function saveStockUpdates(updates) {
     const rowsToDelete = new Set();
 
     updates.forEach(update => {
-      const { productBase, quantity, state } = update;
+      let { productBase, quantity, state } = update;
 
       try {
+        // Clamp quantity to 0 on the backend as a safeguard
+        if (quantity !== null && quantity < 0) {
+          quantity = 0;
+        }
+
         // 1. Set product state
         if (state) {
           setEstadoProducto(productBase, state, 'Actualizado desde dashboard');
