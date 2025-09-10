@@ -89,7 +89,7 @@ function setup() {
 
   // --- 5. Hoja de Reporte Hoy ---
   const hojaReporte = obtenerOCrearHoja(ss, HOJA_REPORTE_HOY);
-  const encabezadosReporte = ["Producto Base", "Inventario Ayer", "Compras del Día", "Ventas del Día", "Inventario Hoy", "Stock Real"];
+  const encabezadosReporte = ["Producto Base", "Inventario Ayer", "Compras del Día", "Ventas del Día", "Inventario Hoy", "Stock Real", "Discrepancias"];
   if (hojaReporte.getRange("A1").getValue() === "") {
     hojaReporte.getRange(1, 1, 1, encabezadosReporte.length).setValues([encabezadosReporte]).setFontWeight("bold");
   }
@@ -281,10 +281,13 @@ function calcularInventarioDiario() {
     // --- 7. ESCRIBIR RESULTADOS EN LAS HOJAS ---
     // Limpiar reporte anterior y escribir el nuevo
     if (hojaReporteHoy.getLastRow() > 1) {
-      hojaReporteHoy.getRange(2, 1, hojaReporteHoy.getLastRow() - 1, 6).clearContent();
+      hojaReporteHoy.getRange(2, 1, hojaReporteHoy.getLastRow() - 1, 7).clearContent();
     }
     if (reporteHoy.length > 0) {
       hojaReporteHoy.getRange(2, 1, reporteHoy.length, 6).setValues(reporteHoy);
+      // Añadir fórmula de discrepancia en la columna G
+      const formulaRange = hojaReporteHoy.getRange(2, 7, reporteHoy.length);
+      formulaRange.setFormulaR1C1('=IF(RC[-1]<>"", RC[-1]-RC[-2], "")');
     }
 
     // Añadir al histórico
@@ -1105,75 +1108,84 @@ function getDashboardData() {
 
 
 /**
- * Guarda el inventario real introducido por el usuario.
- * @param {Array<Object>} inventoryData Un array de objetos, cada uno con {productoBase, cantidad}.
+ * Guarda el stock real para un único producto.
+ * @param {string} productBase El producto base a actualizar.
+ * @param {number} quantity La cantidad de stock real.
  */
-function saveRealInventory(inventoryData) {
+function saveSingleRealStock(productBase, quantity) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const hojaReporte = ss.getSheetByName(HOJA_REPORTE_HOY);
     const hojaDiscrepancias = ss.getSheetByName("Discrepancias");
     const hojaHistorico = ss.getSheetByName(HOJA_HISTORICO);
 
-    const datosReporte = hojaReporte.getRange("A2:F" + hojaReporte.getLastRow()).getValues();
-    const reporteMap = new Map(datosReporte.map(row => [row[0], row])); // Map by Producto Base
-
-    const datosHistorico = hojaHistorico.getRange("A2:E" + hojaHistorico.getLastRow()).getValues();
-
-    const discrepanciasNuevas = [];
-    const timestamp = new Date();
-
-    inventoryData.forEach(item => {
-      const productoBase = item.productoBase;
-      const cantidadReal = parseFloat(item.cantidad);
-
-      if (!isNaN(cantidadReal) && reporteMap.has(productoBase)) {
-        const filaReporte = reporteMap.get(productoBase);
-        const inventarioEstimado = parseFloat(filaReporte[4]); // Columna E: Inventario Hoy
-        const discrepancia = cantidadReal - inventarioEstimado;
-
-        // 1. Log en Hoja Discrepancias
-        discrepanciasNuevas.push([
-          timestamp,
-          productoBase,
-          inventarioEstimado,
-          cantidadReal,
-          discrepancia
-        ]);
-
-        // 2. Actualizar Stock Real en Hoja Reporte Hoy
-        // Encontrar la fila correcta y actualizar solo la columna F (Stock Real)
-        for (let i = 0; i < datosReporte.length; i++) {
-          if (datosReporte[i][0] === productoBase) {
-            hojaReporte.getRange(i + 2, 6).setValue(cantidadReal); // Fila i+2, Columna 6
-            break;
-          }
-        }
-
-        // 3. Actualizar Stock Real en la última entrada del Histórico para ese producto
-        // Esto es crucial para que el cálculo del día siguiente sea correcto.
-        let ultimaFilaProducto = -1;
-        for (let i = datosHistorico.length - 1; i >= 0; i--) {
-          if (datosHistorico[i][1] === productoBase) {
-             ultimaFilaProducto = i;
-             break;
-          }
-        }
-        if(ultimaFilaProducto !== -1) {
-            // La columna D (4) es 'Stock Real' en Histórico
-            hojaHistorico.getRange(ultimaFilaProducto + 2, 4).setValue(cantidadReal);
-        }
-      }
-    });
-
-    if (discrepanciasNuevas.length > 0) {
-      hojaDiscrepancias.getRange(hojaDiscrepancias.getLastRow() + 1, 1, discrepanciasNuevas.length, 5).setValues(discrepanciasNuevas);
+    if (!hojaReporte || hojaReporte.getLastRow() < 2) {
+      throw new Error(`La hoja "${HOJA_REPORTE_HOY}" no está lista o está vacía.`);
     }
 
-    return { success: true, message: "Inventario real guardado correctamente." };
+    const data = hojaReporte.getDataRange().getValues();
+    const headers = data[0];
+    const baseProductCol = headers.indexOf("Producto Base");
+    const invHoyCol = headers.indexOf("Inventario Hoy");
+    const stockRealCol = headers.indexOf("Stock Real");
+
+    if (baseProductCol === -1 || invHoyCol === -1 || stockRealCol === -1) {
+      throw new Error("No se encontraron las columnas 'Producto Base', 'Inventario Hoy' o 'Stock Real' en 'Reporte Hoy'.");
+    }
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][baseProductCol] === productBase) {
+        const rowNum = i + 1;
+
+        hojaReporte.getRange(rowNum, stockRealCol + 1).setValue(quantity);
+
+        const inventarioEstimado = parseFloat(data[i][invHoyCol]);
+        const discrepancia = quantity - inventarioEstimado;
+        if (hojaDiscrepancias) {
+          hojaDiscrepancias.appendRow([new Date(), productBase, inventarioEstimado, quantity, discrepancia]);
+        }
+
+        if (hojaHistorico && hojaHistorico.getLastRow() > 1) {
+            const histData = hojaHistorico.getDataRange().getValues();
+            let ultimaFilaProducto = -1;
+            for (let j = histData.length - 1; j >= 1; j--) {
+                if (histData[j][1] === productBase) {
+                    ultimaFilaProducto = j + 1;
+                    break;
+                }
+            }
+            if (ultimaFilaProducto !== -1) {
+                hojaHistorico.getRange(ultimaFilaProducto, 4).setValue(quantity);
+            }
+        }
+
+        return { success: true, message: `Stock para ${productBase} actualizado.` };
+      }
+    }
+
+    return { success: false, error: `Producto ${productBase} no encontrado en 'Reporte Hoy'.` };
 
   } catch (e) {
-    Logger.log(e);
+    Logger.log(e.stack);
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Aprueba un producto y guarda su stock real en una sola operación.
+ * @param {string} productBase El producto base a actualizar.
+ * @param {number} quantity La cantidad de stock real.
+ */
+function approveProductAndSaveStock(productBase, quantity) {
+  try {
+    setEstadoProducto(productBase, 'aprobado', 'Aprobado desde dashboard');
+    const saveResult = saveSingleRealStock(productBase, quantity);
+    if (!saveResult.success) {
+      throw new Error(saveResult.error);
+    }
+    return { success: true, message: `Producto ${productBase} aprobado y stock actualizado.` };
+  } catch (e) {
+    Logger.log(e.stack);
     return { success: false, error: e.message };
   }
 }
