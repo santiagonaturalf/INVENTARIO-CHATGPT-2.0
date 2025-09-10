@@ -35,8 +35,7 @@ const TIMEZONE = "America/Santiago";
 function onOpen() {
   SpreadsheetApp.getUi()
       .createMenu('Inventario 2.0')
-      .addItem('Abrir Dashboard (Antiguo)', 'showDashboard')
-      .addItem('Abrir Dashboard v3', 'showDashboardV3')
+      .addItem('Abrir Dashboard', 'showDashboard')
       .addSeparator()
       .addItem('1. Configurar Hojas y Fórmulas', 'setup')
       .addItem('Enriquecer Datos de Orders', 'completarSKUenOrders')
@@ -543,20 +542,10 @@ function doGet(e) {
 }
 
 /**
- * Lanza el dashboard en un diálogo modal (ventana emergente).
+ * Lanza el dashboard v3 en un diálogo modal (ventana emergente).
  */
 function showDashboard() {
   const html = HtmlService.createHtmlOutputFromFile('dashboard.html')
-      .setWidth(1200)
-      .setHeight(700);
-  SpreadsheetApp.getUi().showModalDialog(html, 'Dashboard de Inventario v2');
-}
-
-/**
- * Lanza el dashboard v3 en un diálogo modal (ventana emergente).
- */
-function showDashboardV3() {
-  const html = HtmlService.createHtmlOutputFromFile('dashboard_v3.html')
       .setWidth(1200)
       .setHeight(700);
   SpreadsheetApp.getUi().showModalDialog(html, 'Dashboard de Inventario v3');
@@ -1082,12 +1071,37 @@ function getDashboardData() {
     });
   });
 
-  const estados = getEstadosParaUI(); // <-- NUEVO
+  const persistedStates = getEstadosParaUI();
+  const adjustedStates = {};
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  baseInfoMap.forEach((info, base) => {
+    const persistedState = persistedStates[base] || 'pendiente';
+    if (persistedState === 'aprobado') {
+      const lastInv = lastInvMap.get(base);
+      if (lastInv && lastInv.ts) {
+        const lastInvDate = new Date(lastInv.ts);
+        lastInvDate.setHours(0, 0, 0, 0);
+        if (lastInvDate.getTime() < today.getTime()) {
+          adjustedStates[base] = 'pendiente'; // Reset state for UI
+        } else {
+          adjustedStates[base] = 'aprobado'; // Keep approved for today
+        }
+      } else {
+        adjustedStates[base] = 'pendiente'; // No history, should be pending
+      }
+    } else {
+      adjustedStates[base] = persistedState;
+    }
+  });
+
   return {
     inventory: inventory,
     sales: [],
     acquisitions: [],
-    estados: estados // <-- NUEVO
+    estados: adjustedStates
   };
 }
 
