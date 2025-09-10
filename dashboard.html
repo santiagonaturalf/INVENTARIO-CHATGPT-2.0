@@ -203,7 +203,7 @@
     </div>
 
     <script>
-        let dashboardData = null; // { inventory, estados, ... }
+        let dashboardData = null; // { inventoryByCategory, estados, ... }
         let estadosMap = {}; // { baseProduct: 'pendiente'|'verificando'|'aprobado' }
 
         window.addEventListener('load', () => {
@@ -221,9 +221,9 @@
                 .withSuccessHandler(function(payload) {
                     setLoadingState(false);
                     try {
-                        if (!payload || !payload.inventory) {
+                        if (!payload || !payload.inventoryByCategory) {
                             mostrarMensaje(payload?.msg || 'No se pudo cargar la data.');
-                            dashboardData = { inventory: [], estados: {} };
+                            dashboardData = { inventoryByCategory: {}, estados: {} };
                             estadosMap = {};
                         } else {
                             dashboardData = payload;
@@ -244,24 +244,40 @@
         }
 
         function getDatosFiltrados() {
-            if (!dashboardData?.inventory) return [];
+            if (!dashboardData?.inventoryByCategory) return {};
+
             const onlyMov = document.getElementById('filterMovHoy')?.checked;
             const hideApproved = document.getElementById('hideApproved')?.checked;
             const q = getSearchText();
-            return dashboardData.inventory.filter(item => {
-                const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
-                if (onlyMov && !(Number(item.sales) > 0 || Number(item.purchases) > 0)) return false;
-                const isApproved = (estado === 'verificando' || estado === 'aprobado');
-                const matchName = item.baseProduct.toLowerCase().includes(q);
-                const matchCategory = (item.category || '').toLowerCase().includes(q);
 
-                if (hideApproved && isApproved) {
-                    if (!q) return false;
-                    if (!(matchName || matchCategory)) return false;
+            const filteredInventory = {};
+
+            for (const category in dashboardData.inventoryByCategory) {
+                const products = dashboardData.inventoryByCategory[category];
+
+                const filteredProducts = products.filter(item => {
+                    const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
+                    if (onlyMov && !(Number(item.sales) > 0 || Number(item.purchases) > 0)) return false;
+
+                    const isApproved = (estado === 'verificando' || estado === 'aprobado');
+                    const matchName = item.baseProduct.toLowerCase().includes(q);
+                    const matchCategory = (item.category || '').toLowerCase().includes(q);
+
+                    if (hideApproved && isApproved) {
+                        if (!q) return false;
+                        if (!(matchName || matchCategory)) return false;
+                    }
+
+                    if (q && !(matchName || matchCategory)) return false;
+
+                    return true;
+                });
+
+                if (filteredProducts.length > 0) {
+                    filteredInventory[category] = filteredProducts;
                 }
-                if (q && !(matchName || matchCategory)) return false;
-                return true;
-            });
+            }
+            return filteredInventory;
         }
 
         function estadoBadgeClass(estado) {
@@ -278,38 +294,48 @@
         function renderInventoryTable() {
             const tbody = document.getElementById('tablaInventarioBody');
             tbody.innerHTML = '';
-            const rows = getDatosFiltrados();
-            if (rows.length === 0) {
-                const columnCount = 8;
+            const filteredData = getDatosFiltrados();
+            const categories = Object.keys(filteredData);
+
+            if (categories.length === 0) {
+                const columnCount = 9;
                 tbody.innerHTML = `<tr><td colspan="${columnCount}" style="text-align:center;">No hay productos que coincidan con los filtros.</td></tr>`;
                 return;
             }
-            rows.forEach(item => {
-                const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
-                const tr = document.createElement('tr');
-                if (item.error) {
-                    tr.classList.add('error-row');
-                    tr.title = item.errorMsg || 'Inconsistencia detectada';
-                }
-                if (item.expectedStock <= 0) {
-                    tr.classList.add('low-stock');
-                }
-                tr.dataset.productBase = item.baseProduct;
-                tr.innerHTML = `
-                    <td><input type="checkbox" class="mass-approval-checkbox" data-base="${item.baseProduct}"></td>
-                    <td>${item.baseProduct}</td>
-                    <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
-                    <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
-                    <td class="num">${Number(item.sales||0).toFixed(2)}</td>
-                    <td class="num"><strong>${Number(item.expectedStock||0).toFixed(2)}</strong></td>
-                    <td>${item.unit || ''}</td>
-                    <td>
-                      <span class="${estadoBadgeClass(estado)}" style="margin-right:6px;">${estado}</span>
-                      <input type="checkbox" class="approval-checkbox" data-base="${item.baseProduct}" ${estado === 'aprobado' ? 'checked' : ''} style="vertical-align: middle;">
-                    </td>
-                    <td><input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/></td>
-                `;
-                tbody.appendChild(tr);
+
+            categories.forEach(category => {
+                const headerRow = document.createElement('tr');
+                headerRow.innerHTML = `<td colspan="9" style="background-color: #f0f2f5; font-weight: bold; color: var(--primary-color);">${category}</td>`;
+                tbody.appendChild(headerRow);
+
+                const products = filteredData[category];
+                products.forEach(item => {
+                    const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
+                    const tr = document.createElement('tr');
+                    if (item.error) {
+                        tr.classList.add('error-row');
+                        tr.title = item.errorMsg || 'Inconsistencia detectada';
+                    }
+                    if (item.expectedStock <= 0) {
+                        tr.classList.add('low-stock');
+                    }
+                    tr.dataset.productBase = item.baseProduct;
+                    tr.innerHTML = `
+                        <td><input type="checkbox" class="mass-approval-checkbox" data-base="${item.baseProduct}"></td>
+                        <td>${item.baseProduct}</td>
+                        <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
+                        <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
+                        <td class="num">${Number(item.sales||0).toFixed(2)}</td>
+                        <td class="num"><strong>${Number(item.expectedStock||0).toFixed(2)}</strong></td>
+                        <td>${item.unit || ''}</td>
+                        <td>
+                          <span class="${estadoBadgeClass(estado)}" style="margin-right:6px;">${estado}</span>
+                          <input type="checkbox" class="approval-checkbox" data-base="${item.baseProduct}" ${estado === 'aprobado' ? 'checked' : ''} style="vertical-align: middle;">
+                        </td>
+                        <td><input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
             });
 
             addEventListeners();
@@ -319,14 +345,13 @@
             google.script.run
                 .withSuccessHandler(response => {
                     if (response.success) {
-                        // Update local state map on success
                         updates.forEach(update => {
                             if(update.state) estadosMap[update.productBase] = update.state;
                         });
                     } else {
                         alert("Error al guardar: " + response.error);
                     }
-                    renderInventoryTable(); // Re-render to show changes and ensure consistency
+                    renderInventoryTable();
                 })
                 .withFailureHandler(err => {
                     alert("Error de comunicación con el servidor: " + err.message);
@@ -338,7 +363,6 @@
         function addEventListeners() {
             const tbody = document.getElementById('tablaInventarioBody');
 
-            // --- Individual Approval Checkboxes ---
             tbody.querySelectorAll('.approval-checkbox').forEach(checkbox => {
                 checkbox.addEventListener('change', function() {
                     const base = this.dataset.base;
@@ -362,24 +386,20 @@
                 });
             });
 
-            // --- Stock Real Inputs ---
             tbody.querySelectorAll('.real-stock-input').forEach(input => {
                 const base = input.dataset.base;
-                // Save on change if already approved
                 input.addEventListener('change', function() {
                     if (estadosMap[base] === 'aprobado') {
                         const quantity = parseFloat(this.value);
                         if(isNaN(quantity)) { return; }
                         if (quantity < 0) {
                             alert('El Stock Real no puede ser negativo.');
-                            // Re-render to revert the input value if needed, or manually revert
                             renderInventoryTable();
                             return;
                         }
                         handleItemSave([{ productBase: base, quantity: quantity, state: null }]);
                     }
                 });
-                // Approve on Enter if not already approved
                 input.addEventListener('keydown', function(event) {
                     if (event.key === 'Enter') {
                         event.preventDefault();
@@ -391,7 +411,6 @@
                 });
             });
 
-            // --- Mass Approval ---
             document.getElementById('select-all-checkbox').addEventListener('change', function() {
                 tbody.querySelectorAll('.mass-approval-checkbox').forEach(checkbox => {
                     checkbox.checked = this.checked;
@@ -399,7 +418,6 @@
             });
         }
 
-        // This function is attached outside renderInventoryTable
         function setupMassApproval() {
             document.getElementById('approve-selected-button').addEventListener('click', function() {
                 const updates = [];
@@ -444,13 +462,10 @@
             buttons.forEach(button => {
                 button.disabled = isLoading;
                 const updateButton = button.textContent.includes('Actualizar');
-                const saveButton = button.textContent.includes('Guardar');
                 if (isLoading) {
                     if (updateButton) button.textContent = 'Actualizando...';
-                    if (saveButton) button.textContent = 'Guardando...';
                 } else {
                     if (updateButton) button.textContent = '🔄 Actualizar Datos';
-                    if (saveButton) button.textContent = '💾 Guardar Inventario';
                 }
             });
         }

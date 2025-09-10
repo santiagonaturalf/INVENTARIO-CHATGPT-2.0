@@ -1071,9 +1071,30 @@ function getDashboardData() {
     });
   });
 
+  // --- Group and sort inventory for the new view ---
+  const inventoryByCategory = {};
+  inventory.forEach(item => {
+    const category = item.category || 'Sin Categoría';
+    if (!inventoryByCategory[category]) {
+      inventoryByCategory[category] = [];
+    }
+    inventoryByCategory[category].push(item);
+  });
+
+  // Sort products within each category
+  for (const category in inventoryByCategory) {
+    inventoryByCategory[category].sort((a, b) => a.baseProduct.localeCompare(b.baseProduct));
+  }
+
+  // Create a new object with sorted categories
+  const sortedInventory = {};
+  Object.keys(inventoryByCategory).sort().forEach(category => {
+      sortedInventory[category] = inventoryByCategory[category];
+  });
+
+  // --- Adjust states based on date (from previous logic) ---
   const persistedStates = getEstadosParaUI();
   const adjustedStates = {};
-
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -1085,12 +1106,12 @@ function getDashboardData() {
         const lastInvDate = new Date(lastInv.ts);
         lastInvDate.setHours(0, 0, 0, 0);
         if (lastInvDate.getTime() < today.getTime()) {
-          adjustedStates[base] = 'pendiente'; // Reset state for UI
+          adjustedStates[base] = 'pendiente';
         } else {
-          adjustedStates[base] = 'aprobado'; // Keep approved for today
+          adjustedStates[base] = 'aprobado';
         }
       } else {
-        adjustedStates[base] = 'pendiente'; // No history, should be pending
+        adjustedStates[base] = 'pendiente';
       }
     } else {
       adjustedStates[base] = persistedState;
@@ -1098,7 +1119,7 @@ function getDashboardData() {
   });
 
   return {
-    inventory: inventory,
+    inventoryByCategory: sortedInventory,
     sales: [],
     acquisitions: [],
     estados: adjustedStates
