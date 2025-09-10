@@ -1172,6 +1172,37 @@ function saveSingleRealStock(productBase, quantity) {
 }
 
 /**
+ * Aprueba multiples productos y guarda su stock real.
+ * @param {Array<Object>} products Un array de objetos, cada uno con {productBase, quantity}.
+ */
+function approveMultipleProducts(products) {
+  if (!products || !Array.isArray(products) || products.length === 0) {
+    return { success: false, error: "No se proporcionaron productos para aprobar." };
+  }
+  try {
+    let successCount = 0;
+    const errors = [];
+    products.forEach(product => {
+      const result = approveProductAndSaveStock(product.productBase, product.quantity);
+      if (result.success) {
+        successCount++;
+      } else {
+        errors.push(`Error con ${product.productBase}: ${result.error}`);
+      }
+    });
+
+    if (errors.length > 0) {
+      throw new Error(errors.join('; '));
+    }
+
+    return { success: true, message: `${successCount} productos aprobados exitosamente.` };
+  } catch (e) {
+    Logger.log(e.stack);
+    return { success: false, error: e.message };
+  }
+}
+
+/**
  * Aprueba un producto y guarda su stock real en una sola operación.
  * @param {string} productBase El producto base a actualizar.
  * @param {number} quantity La cantidad de stock real.

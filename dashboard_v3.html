@@ -98,6 +98,15 @@
             border-radius: 6px;
             text-align: center;
         }
+        /* Hide arrows from number inputs */
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        input[type=number] {
+          -moz-appearance: textfield;
+        }
 
         .footer-buttons {
             margin-top: 20px;
@@ -168,6 +177,7 @@
                 <table id="inventory-table">
                     <thead>
                         <tr>
+                            <th><input type="checkbox" id="select-all-checkbox"></th>
                             <th>Producto Base</th>
                             <th>Inv. Ayer</th>
                             <th>Compras</th>
@@ -186,6 +196,7 @@
 
             <!-- Botones -->
             <div id="footer-buttons" class="footer-buttons">
+                <button id="approve-selected-button" class="primary-button" style="margin-right: auto;">Aprobar Seleccionados</button>
                 <button class="secondary-button">🔄 Actualizar Datos</button>
             </div>
         </div>
@@ -200,6 +211,7 @@
             document.getElementById('hideApproved')?.addEventListener('change', renderInventoryTable);
             document.getElementById('searchInput')?.addEventListener('input', renderInventoryTable);
             document.querySelector('.secondary-button').addEventListener('click', cargarDatosDashboard);
+            setupMassApproval(); // Set up the listener for the mass approval button
             cargarDatosDashboard();
         });
 
@@ -282,6 +294,7 @@
                 }
                 tr.dataset.productBase = item.baseProduct;
                 tr.innerHTML = `
+                    <td><input type="checkbox" class="mass-approval-checkbox" data-base="${item.baseProduct}"></td>
                     <td>${item.baseProduct}</td>
                     <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
                     <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
@@ -385,6 +398,71 @@
                             .saveSingleRealStock(base, quantity);
                     }
                 });
+
+                input.addEventListener('keydown', function(event) {
+                    if (event.key === 'Enter') {
+                        event.preventDefault(); // Prevent form submission
+                        const row = this.closest('tr');
+                        const checkbox = row.querySelector('.approval-checkbox');
+                        if (checkbox && !checkbox.checked) {
+                            checkbox.click();
+                        }
+                    }
+                });
+            });
+
+            // --- Event Listener for "Select All" Checkbox ---
+            const selectAllCheckbox = document.getElementById('select-all-checkbox');
+            selectAllCheckbox.addEventListener('change', function() {
+                tbody.querySelectorAll('.mass-approval-checkbox').forEach(checkbox => {
+                    checkbox.checked = this.checked;
+                });
+            });
+        }
+
+        // This function is attached outside renderInventoryTable, in the main load event listener
+        function setupMassApproval() {
+            const approveSelectedButton = document.getElementById('approve-selected-button');
+            approveSelectedButton.addEventListener('click', function() {
+                const productsToApprove = [];
+                const rows = document.querySelectorAll("#tablaInventarioBody tr");
+                rows.forEach(row => {
+                    const massCheckbox = row.querySelector('.mass-approval-checkbox');
+                    if (massCheckbox && massCheckbox.checked) {
+                        const base = massCheckbox.dataset.base;
+                        const input = row.querySelector('.real-stock-input');
+                        const quantity = parseFloat(input.value);
+
+                        if (isNaN(quantity)) {
+                            alert(`El producto "${base}" tiene un valor de stock no válido y será omitido.`);
+                            return; // skip this item
+                        }
+                        productsToApprove.push({ productBase: base, quantity: quantity });
+                    }
+                });
+
+                if (productsToApprove.length === 0) {
+                    alert('Por favor, selecciona al menos un producto para aprobar.');
+                    return;
+                }
+
+                setLoadingState(true);
+                google.script.run
+                    .withSuccessHandler(response => {
+                        setLoadingState(false);
+                        if (response.success) {
+                            alert(response.message);
+                        } else {
+                            alert('Error en la aprobación masiva: ' + (response.error || 'Error desconocido'));
+                        }
+                        cargarDatosDashboard(); // Refresh data after mass approval
+                    })
+                    .withFailureHandler(err => {
+                        setLoadingState(false);
+                        alert('Error en la aprobación masiva: ' + (err.message || err));
+                        cargarDatosDashboard();
+                    })
+                    .approveMultipleProducts(productsToApprove);
             });
         }
 
