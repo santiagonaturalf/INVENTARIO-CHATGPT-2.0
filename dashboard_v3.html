@@ -344,16 +344,15 @@
                     const base = this.dataset.base;
                     if (this.checked) {
                         const input = this.closest('tr').querySelector('.real-stock-input');
-                        const quantity = parseFloat(input.value);
+                        let quantity = parseFloat(input.value);
                         if (isNaN(quantity)) {
                             alert('Por favor, introduce un número válido en "Stock Real" antes de aprobar.');
                             this.checked = false;
                             return;
                         }
                         if (quantity < 0) {
-                            alert('El Stock Real no puede ser negativo.');
-                            this.checked = false;
-                            return;
+                            quantity = 0;
+                            input.value = "0.00"; // Also update the input field visually
                         }
                         handleItemSave([{ productBase: base, quantity: quantity, state: 'aprobado' }]);
                     } else {
@@ -368,13 +367,11 @@
                 // Save on change if already approved
                 input.addEventListener('change', function() {
                     if (estadosMap[base] === 'aprobado') {
-                        const quantity = parseFloat(this.value);
+                        let quantity = parseFloat(this.value);
                         if(isNaN(quantity)) { return; }
                         if (quantity < 0) {
-                            alert('El Stock Real no puede ser negativo.');
-                            // Re-render to revert the input value if needed, or manually revert
-                            renderInventoryTable();
-                            return;
+                            quantity = 0;
+                            this.value = "0.00";
                         }
                         handleItemSave([{ productBase: base, quantity: quantity, state: null }]);
                     }
@@ -407,12 +404,15 @@
                     const row = cb.closest('tr');
                     const base = cb.dataset.base;
                     const input = row.querySelector('.real-stock-input');
-                    const quantity = parseFloat(input.value);
+                    let quantity = parseFloat(input.value);
+
                     if (isNaN(quantity)) {
                         alert(`El producto "${base}" tiene un valor de stock no válido y será omitido.`);
-                    } else if (quantity < 0) {
-                        alert(`El producto "${base}" tiene un stock real negativo (${quantity}) y será omitido.`);
                     } else {
+                        if (quantity < 0) {
+                            quantity = 0;
+                            input.value = "0.00"; // Also update the input field visually
+                        }
                         updates.push({ productBase: base, quantity: quantity, state: 'aprobado' });
                     }
                 });

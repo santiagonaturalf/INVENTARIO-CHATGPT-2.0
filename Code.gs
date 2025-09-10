@@ -1074,7 +1074,7 @@ function getDashboardData() {
       lastInventory: lastInventory,
       purchases:    purchases,
       sales:        sales,
-      expectedStock: lastInventory + purchases - sales,
+      expectedStock: Math.max(0, lastInventory + purchases - sales),
       unit:         info.unit || '',
       category:     info.category || '',
       error:        false,
