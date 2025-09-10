@@ -312,159 +312,104 @@
                 tbody.appendChild(tr);
             });
 
-            // --- Event Listeners for Checkboxes ---
+            addEventListeners();
+        }
+
+        function handleItemSave(updates) {
+            google.script.run
+                .withSuccessHandler(response => {
+                    if (response.success) {
+                        // Update local state map on success
+                        updates.forEach(update => {
+                            if(update.state) estadosMap[update.productBase] = update.state;
+                        });
+                    } else {
+                        alert("Error al guardar: " + response.error);
+                    }
+                    renderInventoryTable(); // Re-render to show changes and ensure consistency
+                })
+                .withFailureHandler(err => {
+                    alert("Error de comunicación con el servidor: " + err.message);
+                    renderInventoryTable();
+                })
+                .saveStockUpdates(updates);
+        }
+
+        function addEventListeners() {
+            const tbody = document.getElementById('tablaInventarioBody');
+
+            // --- Individual Approval Checkboxes ---
             tbody.querySelectorAll('.approval-checkbox').forEach(checkbox => {
                 checkbox.addEventListener('change', function() {
-                    const base = this.getAttribute('data-base');
-
+                    const base = this.dataset.base;
                     if (this.checked) {
-                        // --- Logic for APPROVING ---
-                        const row = this.closest('tr');
-                        const input = row.querySelector('.real-stock-input');
+                        const input = this.closest('tr').querySelector('.real-stock-input');
                         const quantity = parseFloat(input.value);
-
                         if (isNaN(quantity)) {
                             alert('Por favor, introduce un número válido en "Stock Real" antes de aprobar.');
-                            this.checked = false; // Revert checkbox
+                            this.checked = false;
                             return;
                         }
-
-                        google.script.run
-                            .withSuccessHandler(response => {
-                                if (response.success) {
-                                    estadosMap[base] = 'aprobado';
-                                    const badge = this.parentElement.querySelector('span');
-                                    if(badge) {
-                                      badge.textContent = 'aprobado';
-                                      badge.className = estadoBadgeClass('aprobado');
-                                    }
-                                } else {
-                                    alert('Error al aprobar: ' + (response.error || 'Error desconocido'));
-                                    this.checked = false;
-                                }
-                            })
-                            .withFailureHandler(err => {
-                                alert('Error al aprobar: ' + (err.message || err));
-                                this.checked = false;
-                            })
-                            .approveProductAndSaveStock(base, quantity);
-
+                        handleItemSave([{ productBase: base, quantity: quantity, state: 'aprobado' }]);
                     } else {
-                        // --- Logic for UN-APPROVING ---
-                        google.script.run
-                            .withSuccessHandler(() => {
-                                estadosMap[base] = 'pendiente';
-                                const badge = this.parentElement.querySelector('span');
-                                if(badge) {
-                                  badge.textContent = 'pendiente';
-                                  badge.className = estadoBadgeClass('pendiente');
-                                }
-                            })
-                            .withFailureHandler(err => {
-                                alert('No se pudo actualizar el estado: ' + (err.message || err));
-                                this.checked = true;
-                            })
-                            .setEstadoProducto(base, 'pendiente', '');
+                        handleItemSave([{ productBase: base, quantity: null, state: 'pendiente' }]);
                     }
                 });
             });
 
-            // --- Event Listeners for Stock Inputs ---
+            // --- Stock Real Inputs ---
             tbody.querySelectorAll('.real-stock-input').forEach(input => {
+                const base = input.dataset.base;
+                // Save on change if already approved
                 input.addEventListener('change', function() {
-                    const base = this.dataset.base; // Use the input's own data-base attribute
-                    const estado = estadosMap[base] || 'pendiente';
-
-                    // Only save if the item is already approved
-                    if (estado === 'aprobado') {
+                    if (estadosMap[base] === 'aprobado') {
                         const quantity = parseFloat(this.value);
-                        if (isNaN(quantity)) {
-                            alert('Por favor, introduce un número válido.');
-                            return;
-                        }
-
-                        // Show a subtle saving indicator
-                        this.style.borderColor = 'orange';
-
-                        google.script.run
-                            .withSuccessHandler(response => {
-                                this.style.borderColor = '#EAEAEA'; // Revert border color
-                                if (!response.success) {
-                                    alert('Error al actualizar el stock: ' + (response.error || 'Error desconocido'));
-                                }
-                            })
-                            .withFailureHandler(err => {
-                                this.style.borderColor = 'red'; // Show error on border
-                                alert('Error al actualizar el stock: ' + (err.message || err));
-                            })
-                            .saveSingleRealStock(base, quantity);
+                        if(isNaN(quantity)) { return; }
+                        handleItemSave([{ productBase: base, quantity: quantity, state: null }]);
                     }
                 });
-
+                // Approve on Enter if not already approved
                 input.addEventListener('keydown', function(event) {
                     if (event.key === 'Enter') {
-                        event.preventDefault(); // Prevent form submission
-                        const row = this.closest('tr');
-                        const checkbox = row.querySelector('.approval-checkbox');
-                        if (checkbox && !checkbox.checked) {
+                        event.preventDefault();
+                        if (estadosMap[base] !== 'aprobado') {
+                            const checkbox = this.closest('tr').querySelector('.approval-checkbox');
                             checkbox.click();
                         }
                     }
                 });
             });
 
-            // --- Event Listener for "Select All" Checkbox ---
-            const selectAllCheckbox = document.getElementById('select-all-checkbox');
-            selectAllCheckbox.addEventListener('change', function() {
+            // --- Mass Approval ---
+            document.getElementById('select-all-checkbox').addEventListener('change', function() {
                 tbody.querySelectorAll('.mass-approval-checkbox').forEach(checkbox => {
                     checkbox.checked = this.checked;
                 });
             });
         }
 
-        // This function is attached outside renderInventoryTable, in the main load event listener
+        // This function is attached outside renderInventoryTable
         function setupMassApproval() {
-            const approveSelectedButton = document.getElementById('approve-selected-button');
-            approveSelectedButton.addEventListener('click', function() {
-                const productsToApprove = [];
-                const rows = document.querySelectorAll("#tablaInventarioBody tr");
-                rows.forEach(row => {
-                    const massCheckbox = row.querySelector('.mass-approval-checkbox');
-                    if (massCheckbox && massCheckbox.checked) {
-                        const base = massCheckbox.dataset.base;
-                        const input = row.querySelector('.real-stock-input');
-                        const quantity = parseFloat(input.value);
-
-                        if (isNaN(quantity)) {
-                            alert(`El producto "${base}" tiene un valor de stock no válido y será omitido.`);
-                            return; // skip this item
-                        }
-                        productsToApprove.push({ productBase: base, quantity: quantity });
+            document.getElementById('approve-selected-button').addEventListener('click', function() {
+                const updates = [];
+                document.querySelectorAll('.mass-approval-checkbox:checked').forEach(cb => {
+                    const row = cb.closest('tr');
+                    const base = cb.dataset.base;
+                    const input = row.querySelector('.real-stock-input');
+                    const quantity = parseFloat(input.value);
+                    if (isNaN(quantity)) {
+                        alert(`El producto "${base}" tiene un valor de stock no válido y será omitido.`);
+                    } else {
+                        updates.push({ productBase: base, quantity: quantity, state: 'aprobado' });
                     }
                 });
 
-                if (productsToApprove.length === 0) {
+                if (updates.length === 0) {
                     alert('Por favor, selecciona al menos un producto para aprobar.');
                     return;
                 }
-
                 setLoadingState(true);
-                google.script.run
-                    .withSuccessHandler(response => {
-                        setLoadingState(false);
-                        if (response.success) {
-                            alert(response.message);
-                        } else {
-                            alert('Error en la aprobación masiva: ' + (response.error || 'Error desconocido'));
-                        }
-                        cargarDatosDashboard(); // Refresh data after mass approval
-                    })
-                    .withFailureHandler(err => {
-                        setLoadingState(false);
-                        alert('Error en la aprobación masiva: ' + (err.message || err));
-                        cargarDatosDashboard();
-                    })
-                    .approveMultipleProducts(productsToApprove);
+                handleItemSave(updates);
             });
         }
 
