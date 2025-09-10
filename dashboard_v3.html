@@ -252,12 +252,14 @@
                 const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
                 if (onlyMov && !(Number(item.sales) > 0 || Number(item.purchases) > 0)) return false;
                 const isApproved = (estado === 'verificando' || estado === 'aprobado');
+                const matchName = item.baseProduct.toLowerCase().includes(q);
+                const matchCategory = (item.category || '').toLowerCase().includes(q);
+
                 if (hideApproved && isApproved) {
                     if (!q) return false;
-                    const match = item.baseProduct.toLowerCase().includes(q);
-                    if (!match) return false;
+                    if (!(matchName || matchCategory)) return false;
                 }
-                if (q && !item.baseProduct.toLowerCase().includes(q)) return false;
+                if (q && !(matchName || matchCategory)) return false;
                 return true;
             });
         }

@@ -1017,17 +1017,20 @@ function getDashboardData() {
     throw new Error('No se encontraron las hojas SKU u Orders.');
   }
 
-  // === 1) Mapa SKU: Nombre Producto -> {productoBase, cantidadVenta, unidadVenta}
+  // === 1) Mapa SKU: {productoBase, cantidadVenta, unidadVenta, categoria}
   const skuData = skuSheet.getRange(2, 1, Math.max(0, skuSheet.getLastRow()-1), 8).getValues();
   const skuMap = new Map();
-  const baseUnitMap = new Map();
+  const baseInfoMap = new Map(); // Unifica la info por producto base
   skuData.forEach(r => {
-    const nombreProd = r[0];
-    const productoBase = r[1];
+    const nombreProd = r[0]; // Col A
+    const productoBase = r[1]; // Col B
+    const categoria = r[5]; // Col F
     const cantidadVenta = parseFloat((r[6] || '0').toString().replace(',', '.')) || 0;
     const unidadVenta   = r[7] || '';
     if (nombreProd) skuMap.set(nombreProd, { productoBase, cantidadVenta, unidadVenta });
-    if (productoBase && !baseUnitMap.has(productoBase)) baseUnitMap.set(productoBase, unidadVenta);
+    if (productoBase && !baseInfoMap.has(productoBase)) {
+      baseInfoMap.set(productoBase, { unit: unidadVenta, category: categoria });
+    }
   });
 
   // === 2) Último inventario por Producto Base (Inv. Ayer)
@@ -1079,7 +1082,7 @@ function getDashboardData() {
 
   // === 5) Armar inventory[] para el Dashboard
   const inventory = [];
-  baseUnitMap.forEach((unidad, base) => {
+  baseInfoMap.forEach((info, base) => {
     const lastInv = lastInvMap.get(base);
     const lastInventory = lastInv ? lastInv.qty : 0;
     const sales    = ventasPorBase.get(base)   || 0;
@@ -1091,7 +1094,8 @@ function getDashboardData() {
       purchases:    purchases,
       sales:        sales,
       expectedStock: lastInventory + purchases - sales,
-      unit:         unidad,
+      unit:         info.unit || '',
+      category:     info.category || '',
       error:        false,
       errorMsg:     ""
     });
