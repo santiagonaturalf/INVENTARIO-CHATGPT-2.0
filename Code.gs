@@ -1240,11 +1240,12 @@ function normalizePhoneForWa(phoneRaw) {
   return DEFAULT_COUNTRY_CODE + digits.replace(/^0+/, '');
 }
 
-function buildWaLink(phoneRaw, text) {
+function buildWaLink(phoneRaw, text, useWeb) {
   const phone = normalizePhoneForWa(phoneRaw);
   const encoded = encodeURIComponent(text || '');
-  // api.whatsapp.com es más tolerante y recomendado
-  return `https://api.whatsapp.com/send?phone=${phone}&text=${encoded}`;
+  const domain = useWeb ? 'web.whatsapp.com' : 'api.whatsapp.com';
+  // api.whatsapp.com es más tolerante y recomendado para el link que abre la app
+  return `https://${domain}/send?phone=${phone}&text=${encoded}`;
 }
 
 /***** Exponer utilidades a front *****/
@@ -1261,6 +1262,7 @@ function getWhatsAppLinkFromTemplate(order, productNamesCsv, template, formURL) 
     .replaceAll('{COMUNA}', order?.comuna ?? '')
     .replaceAll('{FORM_URL}', formURL || DEFAULT_FORM_URL);
 
-  const link = buildWaLink(order?.telefono || '', tpl);
-  return { message: tpl, link };
+  const link = buildWaLink(order?.telefono || '', tpl, false);
+  const webLink = buildWaLink(order?.telefono || '', tpl, true);
+  return { message: tpl, link, webLink };
 }
