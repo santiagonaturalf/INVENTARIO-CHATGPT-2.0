@@ -121,13 +121,18 @@
             <textarea id="tpl_${idx}" oninput="updateRow(${idx})"></textarea>
           </div>
           <div class="col box">
-            <label class="muted">Link WhatsApp (clickeable y copiable)</label>
-            <a id="wa_${idx}" class="link" href="#" target="_blank">—</a>
+            <label class="muted">Links para contactar</label>
             <div class="flex">
-              <button class="btn" onclick="copyLink(${idx})">Copiar link</button>
-              <button class="btn" onclick="copyMsg(${idx})">Copiar mensaje</button>
+                <a id="wa_${idx}" class="btn" href="#" target="_blank">Abrir Chat (App)</a>
+                <a id="wa_web_${idx}" class="btn" href="#" target="_blank">Abrir Chat (Web)</a>
             </div>
-            <div class="muted" id="msgprev_${idx}"></div>
+            <label class="muted" style="margin-top:10px;">Copiar</label>
+            <div class="flex">
+              <button class="btn" onclick="copyLink(${idx})">Copiar Link (App)</button>
+              <button class="btn" onclick="copyWebLink(${idx})">Copiar Link (Web)</button>
+              <button class="btn" onclick="copyMsg(${idx})">Copiar Mensaje</button>
+            </div>
+            <div class="muted" id="msgprev_${idx}" style="margin-top:10px; border-top: 1px solid #eee; padding-top:10px;"></div>
           </div>
         `;
 
@@ -161,16 +166,19 @@
 
       const prods = selectedProducts(idx).join(', ');
 
-      google.script.run.withSuccessHandler(({message, link}) => {
-        const a = document.getElementById(`wa_${idx}`);
-        a.href = link;
-        a.textContent = 'Abrir Chat';
+      google.script.run.withSuccessHandler(({message, link, webLink}) => {
+        document.getElementById(`wa_${idx}`).href = link;
+        document.getElementById(`wa_web_${idx}`).href = webLink;
         document.getElementById(`msgprev_${idx}`).textContent = message;
       }).getWhatsAppLinkFromTemplate(o, prods, tpl, state.formURL);
     }
 
     function copyLink(idx) {
       const a = document.getElementById(`wa_${idx}`);
+      copyText(a.href);
+    }
+    function copyWebLink(idx) {
+      const a = document.getElementById(`wa_web_${idx}`);
       copyText(a.href);
     }
     function copyMsg(idx) {
