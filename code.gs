@@ -1236,8 +1236,8 @@ function normalizePhoneForWa(phoneRaw) {
 function buildWaLink(phoneRaw, text) {
   const phone = normalizePhoneForWa(phoneRaw);
   const encoded = encodeURIComponent(text || '');
-  // wa.me funciona en móvil y redirige a Web en desktop
-  return `https://wa.me/${phone}?text=${encoded}`;
+  // api.whatsapp.com es más tolerante y recomendado
+  return `https://api.whatsapp.com/send?phone=${phone}&text=${encoded}`;
 }
 
 /***** Exponer utilidades a front *****/
