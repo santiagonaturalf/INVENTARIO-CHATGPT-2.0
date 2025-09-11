@@ -35,7 +35,9 @@ const TIMEZONE = "America/Santiago";
 function onOpen() {
   SpreadsheetApp.getUi()
       .createMenu('Inventario 2.0')
-      .addItem('Abrir Dashboard', 'showDashboard')
+      .addItem('Abrir Dashboard de Inventario', 'showDashboard')
+      .addSeparator()
+      .addItem('Contactar Cliente', 'showContactarClienteDashboard')
       .addToUi();
 }
 
@@ -96,6 +98,13 @@ function setup() {
   const headers = ['Producto Base','Estado','Notas','Usuario','Timestamp'];
   if (hojaEstados.getRange(1,1,1,headers.length).isBlank()) {
     hojaEstados.getRange(1,1,1,headers.length).setValues([headers]).setFontWeight('bold');
+  }
+
+  // --- Hoja de Clientes Notificados (para el dashboard de contacto) ---
+  const hojaNotificados = obtenerOCrearHoja(ss, "ClientesNotificados");
+  const encabezadosNotificados = ["Link de Notificación", "Timestamp"];
+  if (hojaNotificados.getRange("A1").getValue() === "") {
+    hojaNotificados.getRange(1, 1, 1, encabezadosNotificados.length).setValues([encabezadosNotificados]).setFontWeight("bold");
   }
 
   SpreadsheetApp.getUi().alert("¡Configuración completada! Las hojas han sido creadas y configuradas.");
@@ -874,8 +883,18 @@ function getDashboardData() {
   const histSheet      = ss.getSheetByName(HOJA_HISTORICO);
 
   if (!skuSheet || !ordersSheet) {
+    // This will be caught by the .withFailureHandler on the client side.
     throw new Error('No se encontraron las hojas SKU u Orders.');
   }
+
+  // --- Validar que las hojas principales no estén vacías ---
+  if (skuSheet.getLastRow() < 2) {
+    return { inventory: [], estados: {}, error: `La hoja "${HOJA_SKU}" está vacía o solo contiene encabezados. Por favor, asegúrate de que tenga datos.` };
+  }
+  if (ordersSheet.getLastRow() < 2) {
+    return { inventory: [], estados: {}, error: `La hoja "${HOJA_ORDERS}" está vacía o solo contiene encabezados. Por favor, asegúrate de que tenga datos.` };
+  }
+
 
   // === 1) Mapa SKU: {productoBase, cantidadVenta, unidadVenta, categoria}
   const skuData = skuSheet.getRange(2, 1, Math.max(0, skuSheet.getLastRow()-1), 8).getValues();
@@ -1093,5 +1112,125 @@ function saveStockUpdates(updates) {
   } catch (e) {
     Logger.log(e.stack);
     return { success: false, error: e.message };
+  }
+}
+
+// =====================================================================================
+// FUNCIONES PARA DASHBOARD "CONTACTAR CLIENTE"
+// =====================================================================================
+
+/**
+ * Lanza el dashboard para contactar clientes en un diálogo modal.
+ */
+function showContactarClienteDashboard() {
+  const html = HtmlService.createHtmlOutputFromFile('contactar_cliente.html')
+      .setWidth(1200)
+      .setHeight(700);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Contactar Cliente');
+}
+
+/**
+ * Obtiene los datos de los pedidos de hoy para el dashboard de contacto.
+ * Agrupa los productos por pedido. Es resiliente a columnas opcionales faltantes.
+ */
+function getContactData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ordersSheet = ss.getSheetByName("Orders"); // Using the global constant HOJA_ORDERS might fail if this file loads first. Safer to use string literal.
+  if (!ordersSheet) {
+    return { error: "La hoja \"Orders\" no fue encontrada." };
+  }
+
+  const data = ordersSheet.getDataRange().getValues();
+  const headers = data[0].map(h => String(h || '').trim());
+
+  // Mapeo de los nombres de columna que necesitamos
+  const headerMap = {
+    orderId: 'Número de pedido',
+    customerName: 'Nombre completo',
+    phone: 'Teléfono',
+    date: 'Fecha',
+    productName: 'Nombre Producto',
+    quantity: 'Cantidad'
+  };
+
+  // Definir qué columnas son absolutamente necesarias
+  const requiredHeaderKeys = ['orderId', 'date', 'productName', 'quantity'];
+  const missingRequired = [];
+
+  requiredHeaderKeys.forEach(key => {
+    if (!headers.includes(headerMap[key])) {
+      missingRequired.push(headerMap[key]);
+    }
+  });
+
+  if (missingRequired.length > 0) {
+    return { error: "Faltan columnas esenciales en la hoja \"Orders\": " + missingRequired.join(', ') + ". Por favor, asegúrate de que existan." };
+  }
+
+  // Encontrar los índices de todas las columnas (requeridas y opcionales)
+  const idx = {};
+  for (const key in headerMap) {
+    idx[key] = headers.indexOf(headerMap[key]);
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const ordersById = {};
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const orderDateRaw = row[idx.date];
+    if (!orderDateRaw) continue; // Skip rows without a date
+
+    const orderDate = new Date(orderDateRaw);
+    if (isNaN(orderDate.getTime())) continue; // Skip rows with invalid date
+
+    if (orderDate >= today && orderDate < tomorrow) {
+      const orderId = row[idx.orderId];
+      if (!orderId) continue; // Skip rows without an order ID
+
+      if (!ordersById[orderId]) {
+        // Usar los datos si la columna existe (índice no es -1), si no, usar un valor por defecto.
+        const customerName = idx.customerName !== -1 ? (row[idx.customerName] || 'N/A') : 'N/A';
+        const phone = idx.phone !== -1 ? String(row[idx.phone] || '').replace(/[^0-9]/g, '') : '';
+
+        ordersById[orderId] = {
+          orderId: orderId,
+          customerName: customerName,
+          phone: phone,
+          products: []
+        };
+      }
+
+      ordersById[orderId].products.push({
+        name: row[idx.productName],
+        quantity: row[idx.quantity]
+      });
+    }
+  }
+
+  return Object.values(ordersById);
+}
+
+/**
+ * Registra un link de notificación de cliente en la hoja "ClientesNotificados".
+ * @param {string} link El URL de WhatsApp generado.
+ */
+function logNotifiedClient(link) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName("ClientesNotificados");
+    if (!sheet) {
+      throw new Error("La hoja 'ClientesNotificados' no fue encontrada. Por favor, ejecuta la configuración desde el menú.");
+    }
+    // [Link, Timestamp]
+    sheet.appendRow([link, new Date()]);
+    return { success: true };
+  } catch (e) {
+    Logger.log("Error en logNotifiedClient: " + e.message);
+    return { success: false, error: e.message }; // Propagate error to client
   }
 }
