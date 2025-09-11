@@ -1125,18 +1125,18 @@ const DEFAULT_COUNTRY_CODE = '56'; // Chile
 const DEFAULT_FORM_URL = 'https://forms.gle/8x3bzfwL2oZyqcou6';
 
 const DEFAULT_TEMPLATE = [
-  '👋 ¡Hola! Te contactamos desde Santiago Natural Food 😊.',
+  '👋 ¡Hola! Te contactamos desde Santiago Natural Food 🙂.',
   '',
   'Te informamos que lamentablemente no pudimos enviar:',
   '',
   'Producto {PRODUCTOS}',
-  'Pedido Nº {PEDIDO}',
+  'Pedido N° {PEDIDO}',
   '',
-  '💳 Para solucionar este inconveniente, Por favor, completa el siguiente formulario para elegir la forma en que deseas tu devolución',
-  '🔗 {FORM_LINK}',
+  '💳 Para solucionar este inconveniente, por favor, completa el siguiente formulario para elegir la forma en que deseas tu devolución',
+  '🔗 {FORM_URL}',
   '',
   '🙌 Si tienes cualquier duda o necesitas asistencia adicional, estamos aquí para ayudarte. ¡Gracias por tu comprensión y confianza!'
-].join('\\n');
+].join('\n');
 
 /***** MENU (function defined above, this is the implementation) *****/
 function openContactarCliente() {
@@ -1250,13 +1250,16 @@ function buildWaLink(phoneRaw, text) {
 /***** Exponer utilidades a front *****/
 function getWhatsAppLinkFromTemplate(order, productNamesCsv, template, formURL) {
   const prods = productNamesCsv || '';
+  const prodsArray = prods.split(', ').filter(p => p.trim() !== '');
+  const formattedProds = prodsArray.map(p => `*${p}*`).join(', ');
+
   const tpl = (template || DEFAULT_TEMPLATE)
-    .replaceAll('{PRODUCTOS}', prods)
+    .replaceAll('{PRODUCTOS}', formattedProds)
     .replaceAll('{PEDIDO}', order?.pedido ?? '')
     .replaceAll('{NOMBRE}', order?.nombre ?? '')
     .replaceAll('{DIRECCION}', order?.direccion ?? '')
     .replaceAll('{COMUNA}', order?.comuna ?? '')
-    .replaceAll('{FORM_LINK}', formURL || DEFAULT_FORM_URL);
+    .replaceAll('{FORM_URL}', formURL || DEFAULT_FORM_URL);
 
   const link = buildWaLink(order?.telefono || '', tpl);
   return { message: tpl, link };
