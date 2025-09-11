@@ -37,7 +37,8 @@
       <span class="muted">Una fila por pedido • Click para ver productos • Genera el link de WhatsApp por fila</span>
     </div>
     <div class="flex" style="margin-top: 10px; padding: 10px; background-color: #f7f7f7; border-radius: 8px; gap: 10px;">
-      <input type="text" id="product-search" placeholder="Buscar producto para notificar..." style="flex-grow: 1; padding: 6px 8px;">
+      <input type="text" id="product-search" list="product-suggestions" placeholder="Buscar producto para notificar..." style="flex-grow: 1; padding: 6px 8px;">
+      <datalist id="product-suggestions"></datalist>
       <button class="btn" onclick="filterOrders()">Buscar</button>
       <button class="btn" onclick="clearFilter()">Limpiar</button>
       <button class="btn" onclick="bulkSelect()">Seleccionar Todos</button>
@@ -259,7 +260,7 @@
       errBox.innerText = 'Error al cargar los datos: ' + err.message +
         '\\n\\nAsegúrate de que la hoja se llame "Orders" y que tenga todas las columnas requeridas.';
     })
-    .withSuccessHandler(({orders, template, formURL}) => {
+    .withSuccessHandler(({orders, template, formURL, productNames}) => {
       document.getElementById('error-box').style.display = 'none';
 
       if (!orders) {
@@ -270,6 +271,18 @@
       state.orders = orders || [];
       state.template = template || '';
       state.formURL = formURL || '';
+
+      const datalist = document.getElementById('product-suggestions');
+      if (productNames && datalist) {
+        datalist.innerHTML = '';
+        productNames.forEach(name => {
+          if (name) { // Ensure name is not empty
+            const option = document.createElement('option');
+            option.value = name;
+            datalist.appendChild(option);
+          }
+        });
+      }
 
       if (state.orders.length === 0) {
         document.getElementById('container').innerHTML = '<div style="padding:20px; color:#777;">No se encontraron pedidos.</div>';

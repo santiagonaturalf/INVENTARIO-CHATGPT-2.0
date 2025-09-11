@@ -1153,7 +1153,7 @@ function fetchOrdersAggregated() {
   if (!sh) throw new Error(`No existe la hoja "${SHEET_NAME}"`);
 
   const values = sh.getDataRange().getDisplayValues();
-  if (values.length < 2) return { orders: [], template: DEFAULT_TEMPLATE, formURL: DEFAULT_FORM_URL };
+  if (values.length < 2) return { orders: [], template: DEFAULT_TEMPLATE, formURL: DEFAULT_FORM_URL, productNames: [] };
 
   // Mapear encabezados sin depender del orden de columnas
   const headers = values[0].map(h => (h || '').toString().trim());
@@ -1179,8 +1179,9 @@ function fetchOrdersAggregated() {
     if (headers.indexOf(k) === -1) throw new Error(`Falta la columna requerida: "${k}"`);
   });
 
-  /** Agrupar por pedido **/
+  /** Agrupar por pedido y recolectar nombres de productos **/
   const byOrder = new Map();
+  const productNames = new Set();
 
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
@@ -1206,6 +1207,10 @@ function fetchOrdersAggregated() {
       nombreProducto: (row[idx.producto] || '').toString().trim(),
       cantidad: (row[idx.cantidad] || '').toString().trim()
     };
+
+    if (item.nombreProducto) {
+      productNames.add(item.nombreProducto);
+    }
     byOrder.get(nPedido).items.push(item);
   }
 
@@ -1216,7 +1221,9 @@ function fetchOrdersAggregated() {
     return nb - na;
   });
 
-  return { orders, template: DEFAULT_TEMPLATE, formURL: DEFAULT_FORM_URL };
+  const uniqueProductNames = Array.from(productNames).sort();
+
+  return { orders, template: DEFAULT_TEMPLATE, formURL: DEFAULT_FORM_URL, productNames: uniqueProductNames };
 }
 
 /***** HELPERS *****/
