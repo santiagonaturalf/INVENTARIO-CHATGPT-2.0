@@ -37,7 +37,7 @@ function onOpen() {
       .createMenu('Inventario 2.0')
       .addItem('Abrir Dashboard de Inventario', 'showDashboard')
       .addSeparator()
-      .addItem('Contactar Cliente', 'showContactarClienteDashboard')
+      .addItem('Contactar Cliente (dashboard)', 'openContactarCliente')
       .addToUi();
 }
 
@@ -1116,121 +1116,148 @@ function saveStockUpdates(updates) {
 }
 
 // =====================================================================================
-// FUNCIONES PARA DASHBOARD "CONTACTAR CLIENTE"
+// FUNCIONES PARA DASHBOARD "CONTACTAR CLIENTE" (NUEVA VERSIÓN)
 // =====================================================================================
 
-/**
- * Lanza el dashboard para contactar clientes en un diálogo modal.
- */
-function showContactarClienteDashboard() {
-  const html = HtmlService.createHtmlOutputFromFile('contactar_cliente.html')
-      .setWidth(1200)
-      .setHeight(700);
+/***** CONFIG *****/
+const SHEET_NAME = 'Orders';
+const DEFAULT_COUNTRY_CODE = '56'; // Chile
+const DEFAULT_FORM_URL = 'https://forms.gle/8x3bzfwL2oZyqcou6';
+
+const DEFAULT_TEMPLATE = [
+  '👋 ¡Hola! Te contactamos desde Santiago Natural Food 😊.',
+  '',
+  'Te informamos que lamentablemente no pudimos enviar:',
+  '',
+  'Producto {PRODUCTOS}',
+  'Pedido Nº {PEDIDO}',
+  '',
+  '💳 Para solucionar este inconveniente, Por favor, completa el siguiente formulario para elegir la forma en que deseas tu devolución',
+  '🔗 {FORM_LINK}',
+  '',
+  '🙌 Si tienes cualquier duda o necesitas asistencia adicional, estamos aquí para ayudarte. ¡Gracias por tu comprensión y confianza!'
+].join('\\n');
+
+/***** MENU (function defined above, this is the implementation) *****/
+function openContactarCliente() {
+  const html = HtmlService.createTemplateFromFile('ContactarCliente').evaluate()
+    .setTitle('Contactar Cliente')
+    .setWidth(1200)
+    .setHeight(700);
   SpreadsheetApp.getUi().showModalDialog(html, 'Contactar Cliente');
 }
 
-/**
- * Obtiene los datos de los pedidos de hoy para el dashboard de contacto.
- * Agrupa los productos por pedido. Es resiliente a columnas opcionales faltantes.
- */
-function getContactData() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const ordersSheet = ss.getSheetByName("Orders"); // Using the global constant HOJA_ORDERS might fail if this file loads first. Safer to use string literal.
-  if (!ordersSheet) {
-    return { error: "La hoja \"Orders\" no fue encontrada." };
-  }
+/***** DATA LAYER *****/
+function fetchOrdersAggregated() {
+  const sh = SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
+  if (!sh) throw new Error(`No existe la hoja "${SHEET_NAME}"`);
 
-  const data = ordersSheet.getDataRange().getValues();
-  const headers = data[0].map(h => String(h || '').trim());
+  const values = sh.getDataRange().getDisplayValues();
+  if (values.length < 2) return { orders: [], template: DEFAULT_TEMPLATE, formURL: DEFAULT_FORM_URL, productNames: [] };
 
-  // Mapeo de los nombres de columna que necesitamos
-  const headerMap = {
-    orderId: 'Número de pedido',
-    customerName: 'Nombre completo',
-    phone: 'Teléfono',
-    date: 'Fecha',
-    productName: 'Nombre Producto',
-    quantity: 'Cantidad'
+  // Mapear encabezados sin depender del orden de columnas
+  const headers = values[0].map(h => (h || '').toString().trim());
+  const col = (name) => headers.indexOf(name);
+
+  const idx = {
+    pedido: col('Número de pedido'),
+    nombre: col('Nombre completo'),
+    email: col('Email'),
+    telefono: col('Teléfono'),
+    direccion: col('Direccion'),
+    depto: col('Depto/Condominio'),
+    comuna: col('Comuna'),
+    estado: col('Estado'),
+    fecha: col('Fecha'),
+    producto: col('Nombre Producto'),
+    cantidad: col('Cantidad')
   };
 
-  // Definir qué columnas son absolutamente necesarias
-  const requiredHeaderKeys = ['orderId', 'date', 'productName', 'quantity'];
-  const missingRequired = [];
-
-  requiredHeaderKeys.forEach(key => {
-    if (!headers.includes(headerMap[key])) {
-      missingRequired.push(headerMap[key]);
-    }
+  // Validación mínima
+  const required = ['Número de pedido','Nombre completo','Teléfono','Nombre Producto','Cantidad'];
+  required.forEach(k => {
+    if (headers.indexOf(k) === -1) throw new Error(`Falta la columna requerida: "${k}"`);
   });
 
-  if (missingRequired.length > 0) {
-    return { error: "Faltan columnas esenciales en la hoja \"Orders\": " + missingRequired.join(', ') + ". Por favor, asegúrate de que existan." };
-  }
+  /** Agrupar por pedido y recolectar nombres de productos **/
+  const byOrder = new Map();
+  const productNames = new Set();
 
-  // Encontrar los índices de todas las columnas (requeridas y opcionales)
-  const idx = {};
-  for (const key in headerMap) {
-    idx[key] = headers.indexOf(headerMap[key]);
-  }
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const nPedido = (row[idx.pedido] || '').toString().trim();
+    if (!nPedido) continue;
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-
-  const ordersById = {};
-
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const orderDateRaw = row[idx.date];
-    if (!orderDateRaw) continue; // Skip rows without a date
-
-    const orderDate = new Date(orderDateRaw);
-    if (isNaN(orderDate.getTime())) continue; // Skip rows with invalid date
-
-    if (orderDate >= today && orderDate < tomorrow) {
-      const orderId = row[idx.orderId];
-      if (!orderId) continue; // Skip rows without an order ID
-
-      if (!ordersById[orderId]) {
-        // Usar los datos si la columna existe (índice no es -1), si no, usar un valor por defecto.
-        const customerName = idx.customerName !== -1 ? (row[idx.customerName] || 'N/A') : 'N/A';
-        const phone = idx.phone !== -1 ? String(row[idx.phone] || '').replace(/[^0-9]/g, '') : '';
-
-        ordersById[orderId] = {
-          orderId: orderId,
-          customerName: customerName,
-          phone: phone,
-          products: []
-        };
-      }
-
-      ordersById[orderId].products.push({
-        name: row[idx.productName],
-        quantity: row[idx.quantity]
+    if (!byOrder.has(nPedido)) {
+      byOrder.set(nPedido, {
+        pedido: nPedido,
+        nombre: (row[idx.nombre] || '').toString().trim(),
+        email: idx.email >= 0 ? (row[idx.email] || '').toString().trim() : '',
+        telefono: (row[idx.telefono] || '').toString().trim(),
+        direccion: idx.direccion >= 0 ? (row[idx.direccion] || '').toString().trim() : '',
+        depto: idx.depto >= 0 ? (row[idx.depto] || '').toString().trim() : '',
+        comuna: idx.comuna >= 0 ? (row[idx.comuna] || '').toString().trim() : '',
+        estado: idx.estado >= 0 ? (row[idx.estado] || '').toString().trim() : '',
+        fecha: idx.fecha >= 0 ? (row[idx.fecha] || '').toString().trim() : '',
+        items: []
       });
     }
+
+    const item = {
+      nombreProducto: (row[idx.producto] || '').toString().trim(),
+      cantidad: (row[idx.cantidad] || '').toString().trim()
+    };
+
+    if (item.nombreProducto) {
+      productNames.add(item.nombreProducto);
+    }
+    byOrder.get(nPedido).items.push(item);
   }
 
-  return Object.values(ordersById);
+  // Orden opcional por número de pedido descendente
+  const orders = Array.from(byOrder.values()).sort((a, b) => {
+    const na = Number(a.pedido), nb = Number(b.pedido);
+    if (isNaN(na) || isNaN(nb)) return (''+b.pedido).localeCompare(''+a.pedido);
+    return nb - na;
+  });
+
+  const uniqueProductNames = Array.from(productNames).sort();
+
+  return { orders, template: DEFAULT_TEMPLATE, formURL: DEFAULT_FORM_URL, productNames: uniqueProductNames };
 }
 
-/**
- * Registra un link de notificación de cliente en la hoja "ClientesNotificados".
- * @param {string} link El URL de WhatsApp generado.
- */
-function logNotifiedClient(link) {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName("ClientesNotificados");
-    if (!sheet) {
-      throw new Error("La hoja 'ClientesNotificados' no fue encontrada. Por favor, ejecuta la configuración desde el menú.");
-    }
-    // [Link, Timestamp]
-    sheet.appendRow([link, new Date()]);
-    return { success: true };
-  } catch (e) {
-    Logger.log("Error en logNotifiedClient: " + e.message);
-    return { success: false, error: e.message }; // Propagate error to client
-  }
+/***** HELPERS *****/
+function normalizePhoneForWa(phoneRaw) {
+  // Solo dígitos
+  const digits = (phoneRaw || '').toString().replace(/\D+/g, '');
+  if (!digits) return '';
+
+  // Si ya viene con 56* lo dejamos, si no, le anteponemos 56
+  if (digits.startsWith(DEFAULT_COUNTRY_CODE)) return digits;
+  // Caso típico Chile: 9 dígitos móviles sin prefijo
+  if (digits.length === 8 || digits.length === 9) return DEFAULT_COUNTRY_CODE + digits;
+  // Si viene con 0 inicial (líneas fijas antiguas), lo removemos y anteponemos 56
+  return DEFAULT_COUNTRY_CODE + digits.replace(/^0+/, '');
+}
+
+function buildWaLink(phoneRaw, text) {
+  const phone = normalizePhoneForWa(phoneRaw);
+  const encoded = encodeURIComponent(text || '');
+  // api.whatsapp.com es más tolerante y recomendado
+  return `https://api.whatsapp.com/send?phone=${phone}&text=${encoded}`;
+}
+
+/***** Exponer utilidades a front *****/
+function getWhatsAppLinkFromTemplate(order, productNamesCsv, template, formURL) {
+  const prods = productNamesCsv || '';
+  const tpl = (template || DEFAULT_TEMPLATE)
+    .replaceAll('{PRODUCTOS}', prods)
+    .replaceAll('{PEDIDO}', order?.pedido ?? '')
+    .replaceAll('{NOMBRE}', order?.nombre ?? '')
+    .replaceAll('{DIRECCION}', order?.direccion ?? '')
+    .replaceAll('{COMUNA}', order?.comuna ?? '')
+    .replaceAll('{FORM_LINK}', formURL || DEFAULT_FORM_URL);
+
+  const link = buildWaLink(order?.telefono || '', tpl);
+  return { message: tpl, link };
 }

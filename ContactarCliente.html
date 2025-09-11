@@ -140,13 +140,7 @@
         wrap.appendChild(det);
 
         // set template inicial
-        document.getElementById(`tpl_${idx}`).value = state.template
-          .replaceAll('{PRODUCTOS}', '___selecciona productos___')
-          .replaceAll('{PEDIDO}', o.pedido)
-          .replaceAll('{NOMBRE}', o.nombre || '')
-          .replaceAll('{DIRECCION}', o.direccion || '')
-          .replaceAll('{COMUNA}', o.comuna || '')
-          .replaceAll('{FORM_LINK}', state.formURL || '');
+        document.getElementById(`tpl_${idx}`).value = state.template;
         // generar primer link
         updateRow(idx);
       });
