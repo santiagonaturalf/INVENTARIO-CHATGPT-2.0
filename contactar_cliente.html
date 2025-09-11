@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    :root {
+      --primary-color: #0288d1; /* A professional blue */
+      --secondary-color: #fbc02d; /* A complementary yellow */
+      --background-color: #f8f9fa;
+      --font-color: #333;
+      --border-color: #dee2e6;
+      --card-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      margin: 20px;
+      background-color: var(--background-color);
+      color: var(--font-color);
+    }
+    .container { max-width: 1400px; margin: auto; }
+    h2 { color: var(--primary-color); }
+    .table-wrapper {
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: var(--card-shadow);
+      margin-bottom: 20px;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid var(--border-color); }
+    th { background-color: #f1f3f5; }
+    .accordion-toggle { cursor: pointer; user-select: none; }
+    .accordion-content {
+      display: none;
+      padding: 15px;
+      background-color: #fcfcfc;
+    }
+    .product-item {
+      padding: 8px;
+      border: 1px solid #eee;
+      border-radius: 5px;
+      margin-bottom: 5px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .product-item:hover { background-color: #e9f5ff; }
+    .message-section { display: flex; gap: 20px; }
+    textarea {
+      width: 100%;
+      height: 250px;
+      padding: 10px;
+      border-radius: 5px;
+      border: 1px solid var(--border-color);
+      font-family: monospace;
+      font-size: 14px;
+    }
+    #generated-links {
+      margin-top: 20px;
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: var(--card-shadow);
+    }
+    #links-list { list-style-type: none; padding: 0; }
+    #links-list li {
+      padding: 8px;
+      border-bottom: 1px solid #eee;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    #loader {
+      text-align: center;
+      padding: 40px;
+      font-size: 1.2em;
+    }
+    .error-message {
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 5px;
+        background-color: #fff0f0;
+        color: #d8000c;
+        border: 1px solid #ffdada;
+        display: none; /* Hidden by default */
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Contactar Cliente - Pedidos de Hoy</h2>
+    <div id="error-box" class="error-message"></div>
+    <div id="loader">Cargando datos de pedidos...</div>
+
+    <div class="message-section">
+      <div class="table-wrapper" style="flex: 2;">
+        <table id="orders-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Número de pedido</th>
+              <th>Nombre completo</th>
+              <th>Teléfono</th>
+            </tr>
+          </thead>
+          <tbody id="orders-tbody"></tbody>
+        </table>
+      </div>
+      <div class="table-wrapper" style="flex: 1;">
+        <h3>Mensaje a Enviar</h3>
+        <textarea id="message-template"></textarea>
+      </div>
+    </div>
+
+    <div id="generated-links">
+      <h3>Links de WhatsApp Generados</h3>
+      <ul id="links-list"></ul>
+    </div>
+  </div>
+
+  <script>
+    let ordersData = [];
+
+    window.addEventListener('load', loadContactData);
+
+    function loadContactData() {
+      document.getElementById('loader').style.display = 'block';
+      document.getElementById('orders-table').style.display = 'none';
+      google.script.run
+        .withSuccessHandler(response => {
+          document.getElementById('loader').style.display = 'none';
+          if (response.error) {
+              showError(response.error);
+              return;
+          }
+          ordersData = response;
+          renderTable();
+          document.getElementById('orders-table').style.display = 'table';
+        })
+        .withFailureHandler(err => {
+            document.getElementById('loader').style.display = 'none';
+            showError('Error al cargar los datos: ' + err.message);
+        })
+        .getContactData();
+    }
+
+    function showError(message) {
+        const errorBox = document.getElementById('error-box');
+        errorBox.textContent = message;
+        errorBox.style.display = 'block';
+    }
+
+    function renderTable() {
+      const tbody = document.getElementById('orders-tbody');
+      tbody.innerHTML = '';
+      if (ordersData.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No hay pedidos para hoy.</td></tr>';
+        return;
+      }
+
+      ordersData.forEach((order, index) => {
+        const row = tbody.insertRow();
+        row.innerHTML = `
+          <td><span class="accordion-toggle">▶</span></td>
+          <td>${order.orderId}</td>
+          <td>${order.customerName}</td>
+          <td>${order.phone}</td>
+        `;
+
+        const accordionRow = tbody.insertRow();
+        accordionRow.style.display = 'none';
+        const cell = accordionRow.insertCell();
+        cell.colSpan = 4;
+
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'accordion-content';
+        order.products.forEach(product => {
+          const productDiv = document.createElement('div');
+          productDiv.className = 'product-item';
+          productDiv.textContent = `${product.name} (Cantidad: ${product.quantity})`;
+          productDiv.onclick = () => selectProduct(order, product);
+          contentDiv.appendChild(productDiv);
+        });
+        cell.appendChild(contentDiv);
+
+        row.querySelector('.accordion-toggle').onclick = () => {
+          const isVisible = accordionRow.style.display === 'table-row';
+          accordionRow.style.display = isVisible ? 'none' : 'table-row';
+          row.querySelector('.accordion-toggle').textContent = isVisible ? '▶' : '▼';
+        };
+      });
+    }
+
+    function selectProduct(order, product) {
+      const messageTemplate = `👋 ¡Hola! Te contactamos desde Santiago Natural Food 😊.
+
+Te informamos que lamentablemente no pudimos enviar:
+
+Producto *${product.name}*
+Cantidad : *${product.quantity}*
+Pedido Nº ${order.orderId}
+
+💳 Para solucionar este inconveniente, Por favor, completa el siguiente formulario para elegir la forma en que deseas tu devolución
+🔗 https://forms.gle/8x3bzfwL2oZyqcou6
+
+🙌 Si tienes cualquier duda o necesitas asistencia adicional, estamos aquí para ayudarte. ¡Gracias por tu comprensión y confianza!`;
+
+      const messageBox = document.getElementById('message-template');
+      messageBox.value = messageTemplate;
+
+      generateWhatsAppLink(order.phone, messageTemplate);
+    }
+
+    function generateWhatsAppLink(phone, message) {
+      if (!phone) {
+        alert('Este cliente no tiene un número de teléfono registrado.');
+        return;
+      }
+      const encodedMessage = encodeURIComponent(message);
+      const link = `https://api.whatsapp.com/send/?phone=${phone}&text=${encodedMessage}&type=phone_number&app_absent=0`;
+
+      addLinkToList(link);
+
+      // Log the link to the spreadsheet
+      google.script.run
+        .withFailureHandler(err => console.error('Error al guardar el link: ' + err.message))
+        .logNotifiedClient(link);
+    }
+
+    function addLinkToList(link) {
+      const list = document.getElementById('links-list');
+      const listItem = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = link;
+      a.textContent = link;
+      a.target = '_blank';
+      listItem.appendChild(a);
+      // Prepend to show the latest link at the top
+      list.prepend(listItem);
+    }
+
+  </script>
+</body>
+</html>
