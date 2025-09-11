@@ -221,21 +221,11 @@
                 .withSuccessHandler(function(payload) {
                     setLoadingState(false);
                     try {
-                        // Handle explicit error payloads from the backend first.
-                        if (payload && payload.error) {
-                            mostrarMensaje(payload.error);
-                            const tbody = document.getElementById('tablaInventarioBody');
-                            if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding: 20px;">${payload.error}</td></tr>`;
-                            return;
-                        }
-
                         if (!payload || !payload.inventory) {
                             mostrarMensaje(payload?.msg || 'No se pudo cargar la data.');
                             dashboardData = { inventory: [], estados: {} };
                             estadosMap = {};
                         } else {
-                            // Hide message box on successful data load
-                            document.getElementById('mensaje').style.display = 'none';
                             dashboardData = payload;
                             estadosMap = payload.estados || {};
                         }
