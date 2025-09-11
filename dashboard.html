@@ -169,6 +169,7 @@
             <div style="display:flex; gap:16px; align-items:center; margin:10px 0;">
               <label><input type="checkbox" id="filterMovHoy"> Mostrar sólo con movimiento hoy</label>
               <label><input type="checkbox" id="hideApproved" checked> Ocultar verificados/aprobados</label>
+              <label><input type="checkbox" id="viewCategories"> Visualizar Categorias</label>
               <small style="opacity:.7;">(Los verificados/aprobados aparecen si los buscas por nombre)</small>
             </div>
 
@@ -209,6 +210,7 @@
         window.addEventListener('load', () => {
             document.getElementById('filterMovHoy')?.addEventListener('change', renderInventoryTable);
             document.getElementById('hideApproved')?.addEventListener('change', renderInventoryTable);
+            document.getElementById('viewCategories')?.addEventListener('change', renderInventoryTable);
             document.getElementById('searchInput')?.addEventListener('input', renderInventoryTable);
             document.querySelector('.secondary-button').addEventListener('click', cargarDatosDashboard);
             setupMassApproval(); // Set up the listener for the mass approval button
@@ -276,11 +278,115 @@
         }
 
         function renderInventoryTable() {
+            const viewByCat = document.getElementById('viewCategories')?.checked;
+            if (viewByCat) {
+                renderCategoryView();
+            } else {
+                renderProductView();
+            }
+        }
+
+        function getCategorySummary() {
+            if (!dashboardData?.inventory) return [];
+
+            const categorySummary = new Map();
+
+            dashboardData.inventory.forEach(item => {
+                const category = item.category || 'Sin Categoría';
+                if (!categorySummary.has(category)) {
+                    categorySummary.set(category, {
+                        lastInventory: 0,
+                        purchases: 0,
+                        sales: 0,
+                        expectedStock: 0,
+                    });
+                }
+
+                const summary = categorySummary.get(category);
+                summary.lastInventory += Number(item.lastInventory) || 0;
+                summary.purchases += Number(item.purchases) || 0;
+                summary.sales += Number(item.sales) || 0;
+                summary.expectedStock += Number(item.expectedStock) || 0;
+            });
+
+            // Convert map to array and sort
+            return Array.from(categorySummary.entries()).map(([category, data]) => ({
+                category,
+                ...data
+            })).sort((a, b) => a.category.localeCompare(b.category));
+        }
+
+        function renderCategoryView() {
+            // 1. Change headers
+            const thead = document.querySelector('#inventory-table thead');
+            thead.innerHTML = `
+                <tr>
+                    <th>Categoría</th>
+                    <th class="num">Inv. Ayer</th>
+                    <th class="num">Compras</th>
+                    <th class="num">Ventas</th>
+                    <th class="num">Inv. Hoy</th>
+                </tr>
+            `;
+
+            // 2. Get and process data
+            const categoryData = getCategorySummary();
+            const tbody = document.getElementById('tablaInventarioBody');
+            tbody.innerHTML = '';
+
+            const q = getSearchText();
+            const filteredCategories = categoryData.filter(cat => {
+                if (q) {
+                    return cat.category.toLowerCase().includes(q);
+                }
+                return true;
+            });
+
+            if (filteredCategories.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">No hay categorías que coincidan.</td></tr>`;
+                return;
+            }
+
+            // 3. Render rows
+            filteredCategories.forEach(cat => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${cat.category}</strong></td>
+                    <td class="num">${cat.lastInventory.toFixed(2)}</td>
+                    <td class="num">${cat.purchases.toFixed(2)}</td>
+                    <td class="num">${cat.sales.toFixed(2)}</td>
+                    <td class="num"><strong>${cat.expectedStock.toFixed(2)}</strong></td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            // 4. Hide footer buttons
+            document.getElementById('footer-buttons').style.display = 'none';
+        }
+
+        function renderProductView() {
+             // Restore footer buttons and original headers
+            document.getElementById('footer-buttons').style.display = 'flex';
+            const thead = document.querySelector('#inventory-table thead');
+            thead.innerHTML = `
+                <tr>
+                    <th><input type="checkbox" id="select-all-checkbox"></th>
+                    <th>Producto Base</th>
+                    <th>Inv. Ayer</th>
+                    <th>Compras</th>
+                    <th>Ventas</th>
+                    <th>Inv. Hoy</th>
+                    <th>Unidad</th>
+                    <th>Estado</th>
+                    <th>Stock Real</th>
+                </tr>
+            `;
+
             const tbody = document.getElementById('tablaInventarioBody');
             tbody.innerHTML = '';
             const rows = getDatosFiltrados();
             if (rows.length === 0) {
-                const columnCount = 8;
+                const columnCount = 9; // Incremented to account for the checkbox column
                 tbody.innerHTML = `<tr><td colspan="${columnCount}" style="text-align:center;">No hay productos que coincidan con los filtros.</td></tr>`;
                 return;
             }
