@@ -1129,7 +1129,7 @@ const DEFAULT_TEMPLATE = [
   '',
   'Te informamos que lamentablemente no pudimos enviar:',
   '',
-  'Producto {PRODUCTOS}',
+  '{PRODUCTOS}',
   'Pedido N° {PEDIDO}',
   '',
   '💳 Para solucionar este inconveniente, por favor, completa el siguiente formulario para elegir la forma en que deseas tu devolución',
@@ -1249,10 +1249,11 @@ function buildWaLink(phoneRaw, text, useWeb) {
 }
 
 /***** Exponer utilidades a front *****/
-function getWhatsAppLinkFromTemplate(order, productNamesCsv, template, formURL) {
-  const prods = productNamesCsv || '';
-  const prodsArray = prods.split(', ').filter(p => p.trim() !== '');
-  const formattedProds = prodsArray.map(p => `*${p}*`).join(', ');
+function getWhatsAppLinkFromTemplate(order, selectedItems, template, formURL) {
+  const items = selectedItems || [];
+  const formattedProds = items.map(item => {
+    return `Producto *${item.name}*\nCantidad *${item.quantity}*`;
+  }).join('\n\n');
 
   const tpl = (template || DEFAULT_TEMPLATE)
     .replaceAll('{PRODUCTOS}', formattedProds)

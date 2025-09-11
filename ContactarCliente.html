@@ -91,7 +91,7 @@
           const id = `p_${idx}_${i}`;
           return `
             <label class="pill">
-              <input type="checkbox" id="${id}" data-idx="${idx}" data-name="${escapeHtml(it.nombreProducto)}" onchange="updateRow(${idx})">
+              <input type="checkbox" id="${id}" data-idx="${idx}" data-name="${escapeHtml(it.nombreProducto)}" data-cantidad="${escapeHtml(it.cantidad)}" onchange="updateRow(${idx})">
               ${escapeHtml(it.nombreProducto)} — <span class="muted">${escapeHtml(it.cantidad)}</span>
             </label>
           `;
@@ -153,8 +153,13 @@
 
     function selectedProducts(idx) {
       const checks = Array.from(document.querySelectorAll(`[id^="p_${idx}_"]`));
-      const names = checks.filter(c => c.checked).map(c => c.getAttribute('data-name'));
-      return names;
+      const products = checks
+        .filter(c => c.checked)
+        .map(c => ({
+          name: c.getAttribute('data-name'),
+          quantity: c.getAttribute('data-cantidad')
+        }));
+      return products;
     }
 
     function updateRow(idx) {
@@ -164,7 +169,7 @@
       const tel = document.getElementById(`tel_${idx}`).value || '';
       const tpl = document.getElementById(`tpl_${idx}`).value || state.template;
 
-      const prods = selectedProducts(idx).join(', ');
+      const prods = selectedProducts(idx);
 
       google.script.run.withSuccessHandler(({message, link, webLink}) => {
         document.getElementById(`wa_${idx}`).href = link;
