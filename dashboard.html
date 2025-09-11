@@ -299,6 +299,7 @@
                         purchases: 0,
                         sales: 0,
                         expectedStock: 0,
+                        products: []
                     });
                 }
 
@@ -307,6 +308,7 @@
                 summary.purchases += Number(item.purchases) || 0;
                 summary.sales += Number(item.sales) || 0;
                 summary.expectedStock += Number(item.expectedStock) || 0;
+                summary.products.push(item);
             });
 
             // Convert map to array and sort
@@ -317,7 +319,7 @@
         }
 
         function renderCategoryView() {
-            // 1. Change headers
+            // 1. Change headers for the main category table
             const thead = document.querySelector('#inventory-table thead');
             thead.innerHTML = `
                 <tr>
@@ -336,32 +338,117 @@
 
             const q = getSearchText();
             const filteredCategories = categoryData.filter(cat => {
+                // If searching, filter categories by name OR by matching product names within them
                 if (q) {
-                    return cat.category.toLowerCase().includes(q);
+                    const categoryMatch = cat.category.toLowerCase().includes(q);
+                    const productMatch = cat.products.some(p => p.baseProduct.toLowerCase().includes(q));
+                    return categoryMatch || productMatch;
                 }
                 return true;
             });
 
             if (filteredCategories.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">No hay categorías que coincidan.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">No hay categorías o productos que coincidan.</td></tr>`;
                 return;
             }
 
-            // 3. Render rows
-            filteredCategories.forEach(cat => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td><strong>${cat.category}</strong></td>
+            // 3. Render accordion rows
+            filteredCategories.forEach((cat, index) => {
+                // --- Create the main category summary row ---
+                const categoryRow = document.createElement('tr');
+                categoryRow.classList.add('category-row');
+                categoryRow.style.cursor = 'pointer';
+                categoryRow.innerHTML = `
+                    <td><span class="accordion-toggle" id="toggle-${index}">[+]</span> <strong>${cat.category}</strong></td>
                     <td class="num">${cat.lastInventory.toFixed(2)}</td>
                     <td class="num">${cat.purchases.toFixed(2)}</td>
                     <td class="num">${cat.sales.toFixed(2)}</td>
                     <td class="num"><strong>${cat.expectedStock.toFixed(2)}</strong></td>
                 `;
-                tbody.appendChild(tr);
+                tbody.appendChild(categoryRow);
+
+                // --- Create the hidden row that will contain the nested table ---
+                const productsContainerRow = document.createElement('tr');
+                const productsContainerCell = document.createElement('td');
+                productsContainerCell.colSpan = 5;
+                productsContainerCell.style.padding = '0 15px';
+                productsContainerRow.appendChild(productsContainerCell);
+                productsContainerRow.classList.add('product-details-row');
+                productsContainerRow.style.display = 'none'; // Initially hidden
+
+                // --- Create the nested table for products ---
+                const innerTable = document.createElement('table');
+                innerTable.style.width = '100%';
+                innerTable.innerHTML = `
+                    <thead>
+                        <tr style="background-color: #fafafa;">
+                            <th style="width: 4%;"><input type="checkbox" class="select-all-in-category-checkbox"></th>
+                            <th>Producto Base</th>
+                            <th class="num">Inv. Ayer</th>
+                            <th class="num">Compras</th>
+                            <th class="num">Ventas</th>
+                            <th class="num">Inv. Hoy</th>
+                            <th>Unidad</th>
+                            <th>Estado</th>
+                            <th>Stock Real</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${cat.products.map(item => {
+                            const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
+                            return `
+                                <tr class="${item.expectedStock <= 0 ? 'low-stock' : ''}" data-product-base="${item.baseProduct}">
+                                    <td><input type="checkbox" class="mass-approval-checkbox" data-base="${item.baseProduct}"></td>
+                                    <td>${item.baseProduct}</td>
+                                    <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
+                                    <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
+                                    <td class="num">${Number(item.sales||0).toFixed(2)}</td>
+                                    <td class="num"><strong>${Number(item.expectedStock||0).toFixed(2)}</strong></td>
+                                    <td>${item.unit || ''}</td>
+                                    <td>
+                                      <span class="${estadoBadgeClass(estado)}" style="margin-right:6px;">${estado}</span>
+                                      <input type="checkbox" class="approval-checkbox" data-base="${item.baseProduct}" ${estado === 'aprobado' ? 'checked' : ''} style="vertical-align: middle;">
+                                    </td>
+                                    <td><input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/></td>
+                                </tr>`;
+                        }).join('')}
+                    </tbody>
+                `;
+
+                productsContainerCell.appendChild(innerTable);
+                tbody.appendChild(productsContainerRow);
+
+                // --- Add click listener to toggle the accordion ---
+                categoryRow.addEventListener('click', () => {
+                    const isCurrentlyOpen = productsContainerRow.style.display !== 'none';
+
+                    // If attempting to close, check for dirty inputs
+                    if (isCurrentlyOpen) {
+                        let isDirty = false;
+                        productsContainerRow.querySelectorAll('.real-stock-input').forEach(input => {
+                            if (input.dataset.isDirty === 'true') {
+                                isDirty = true;
+                            }
+                        });
+
+                        if (isDirty) {
+                            alert('No puedes cerrar este acordeón porque tienes cambios sin guardar. Guarda los cambios o actualiza los datos para descartarlos.');
+                            return; // Prevent closing
+                        }
+                    }
+
+                    // Toggle display
+                    const isHiddenAfterToggle = !isCurrentlyOpen;
+                    productsContainerRow.style.display = isHiddenAfterToggle ? 'none' : '';
+                    document.getElementById(`toggle-${index}`).textContent = isHiddenAfterToggle ? '[+]' : '[-]';
+                });
             });
 
-            // 4. Hide footer buttons
+            // 4. Hide main footer buttons (mass approval might be re-added per category later)
             document.getElementById('footer-buttons').style.display = 'none';
+
+            // 5. Add event listeners for the interactive elements inside all the new tables
+            addEventListeners(); // This will now apply to all rendered product rows
         }
 
         function renderProductView() {
@@ -444,7 +531,7 @@
         function addEventListeners() {
             const tbody = document.getElementById('tablaInventarioBody');
 
-            // --- Individual Approval Checkboxes ---
+            // --- Individual Approval Checkboxes (works for both views) ---
             tbody.querySelectorAll('.approval-checkbox').forEach(checkbox => {
                 checkbox.addEventListener('change', function() {
                     const base = this.dataset.base;
@@ -468,9 +555,20 @@
                 });
             });
 
-            // --- Stock Real Inputs ---
+            // --- Stock Real Inputs (works for both views) ---
             tbody.querySelectorAll('.real-stock-input').forEach(input => {
                 const base = input.dataset.base;
+                const originalValue = input.value;
+
+                // Add a listener to track if the input has been changed from its original value
+                input.addEventListener('input', function() {
+                    if (this.value !== originalValue) {
+                        this.dataset.isDirty = 'true';
+                    } else {
+                        delete this.dataset.isDirty;
+                    }
+                });
+
                 // Save on change if already approved
                 input.addEventListener('change', function() {
                     if (estadosMap[base] === 'aprobado') {
@@ -478,7 +576,6 @@
                         if(isNaN(quantity)) { return; }
                         if (quantity < 0) {
                             alert('El Stock Real no puede ser negativo.');
-                            // Re-render to revert the input value if needed, or manually revert
                             renderInventoryTable();
                             return;
                         }
@@ -497,10 +594,24 @@
                 });
             });
 
-            // --- Mass Approval ---
-            document.getElementById('select-all-checkbox').addEventListener('change', function() {
-                tbody.querySelectorAll('.mass-approval-checkbox').forEach(checkbox => {
-                    checkbox.checked = this.checked;
+            // --- Mass Approval (Product View) ---
+            const mainSelectAll = document.getElementById('select-all-checkbox');
+            if (mainSelectAll) {
+                mainSelectAll.addEventListener('change', function() {
+                    // Select only the checkboxes in the main table, not nested ones
+                    tbody.querySelectorAll(':scope > tr .mass-approval-checkbox').forEach(checkbox => {
+                        checkbox.checked = this.checked;
+                    });
+                });
+            }
+
+            // --- Mass Approval (Category Accordion View) ---
+            tbody.querySelectorAll('.select-all-in-category-checkbox').forEach(headerCheckbox => {
+                headerCheckbox.addEventListener('change', function() {
+                    const innerTable = this.closest('table');
+                    innerTable.querySelectorAll('.mass-approval-checkbox').forEach(productCheckbox => {
+                        productCheckbox.checked = this.checked;
+                    });
                 });
             });
         }
