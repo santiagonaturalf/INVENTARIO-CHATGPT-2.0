@@ -243,6 +243,7 @@
     <script>
         let dashboardData = null; // { inventory, estados, ... }
         let estadosMap = {}; // { baseProduct: 'pendiente'|'verificando'|'aprobado' }
+        let openAccordions = new Set(); // To preserve accordion state across re-renders
 
         window.addEventListener('load', () => {
             document.getElementById('filterMovHoy')?.addEventListener('change', renderInventoryTable);
@@ -391,11 +392,13 @@
 
             // 3. Render accordion rows
             filteredCategories.forEach((cat, index) => {
+                const isInitiallyOpen = openAccordions.has(cat.category);
+
                 // --- Create the main category summary row ---
                 const categoryRow = document.createElement('tr');
                 categoryRow.classList.add('category-row');
                 categoryRow.innerHTML = `
-                    <td><span class="accordion-toggle" id="toggle-${index}">[+]</span> <strong>${cat.category}</strong></td>
+                    <td><span class="accordion-toggle" id="toggle-${index}">${isInitiallyOpen ? '[-]' : '[+]'}</span> <strong>${cat.category}</strong></td>
                     <td class="num">${cat.lastInventory.toFixed(2)}</td>
                     <td class="num">${cat.purchases.toFixed(2)}</td>
                     <td class="num">${cat.sales.toFixed(2)}</td>
@@ -408,7 +411,10 @@
                 const productsContainerCell = document.createElement('td');
                 productsContainerCell.colSpan = 5;
                 productsContainerRow.appendChild(productsContainerCell);
-                productsContainerRow.classList.add('product-details-row', 'hidden');
+                productsContainerRow.classList.add('product-details-row');
+                if (!isInitiallyOpen) {
+                    productsContainerRow.classList.add('hidden');
+                }
 
                 // --- Create the wrapper and the nested table for products ---
                 const innerTableWrapper = document.createElement('div');
@@ -478,6 +484,13 @@
                     productsContainerRow.classList.toggle('hidden');
                     const isHiddenAfterToggle = productsContainerRow.classList.contains('hidden');
                     document.getElementById(`toggle-${index}`).textContent = isHiddenAfterToggle ? '[+]' : '[-]';
+
+                    // Update state
+                    if(isHiddenAfterToggle) {
+                        openAccordions.delete(cat.category);
+                    } else {
+                        openAccordions.add(cat.category);
+                    }
                 });
             });
 
@@ -546,21 +559,40 @@
         }
 
         function handleItemSave(updates) {
+            setLoadingState(true);
             google.script.run
                 .withSuccessHandler(response => {
-                    if (response.success) {
-                        // Update local state map on success
-                        updates.forEach(update => {
-                            if(update.state) estadosMap[update.productBase] = update.state;
+                    setLoadingState(false);
+                    if (response.success && response.updatedProducts) {
+                        // Update local state from the response
+                        response.updatedProducts.forEach(updatedProd => {
+                            // 1. Update the state map
+                            if (updatedProd.state) {
+                                estadosMap[updatedProd.productBase] = updatedProd.state;
+                            }
+
+                            // 2. Find the item in our main data array and update it
+                            const itemIndex = dashboardData.inventory.findIndex(item => item.baseProduct === updatedProd.productBase);
+                            if (itemIndex > -1) {
+                                // Update "Inv. Ayer" with the newly saved stock value.
+                                // This value is now the most recent in the historical log.
+                                if (updatedProd.quantity !== null) {
+                                  dashboardData.inventory[itemIndex].lastInventory = updatedProd.quantity;
+                                  // Also update the expected stock for immediate visual feedback
+                                  const item = dashboardData.inventory[itemIndex];
+                                  item.expectedStock = item.lastInventory + item.purchases - item.sales;
+                                }
+                            }
                         });
-                    } else {
-                        alert("Error al guardar: " + response.error);
+                    } else if (!response.success) {
+                        alert("Error al guardar: " + (response.error || "Ocurrió un error desconocido."));
                     }
-                    renderInventoryTable(); // Re-render to show changes and ensure consistency
+                    renderInventoryTable(); // Re-render with updated local data
                 })
                 .withFailureHandler(err => {
+                    setLoadingState(false);
                     alert("Error de comunicación con el servidor: " + err.message);
-                    renderInventoryTable();
+                    renderInventoryTable(); // Re-render even on failure to reset UI state
                 })
                 .saveStockUpdates(updates);
         }

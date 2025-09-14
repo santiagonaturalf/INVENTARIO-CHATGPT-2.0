@@ -1040,6 +1040,7 @@ function saveStockUpdates(updates) {
 
     let successCount = 0;
     const errors = [];
+    const updatedProducts = []; // Array to hold the data for the frontend
 
     // Sort historical data once to find oldest records later
     const histMap = new Map();
@@ -1093,6 +1094,14 @@ function saveStockUpdates(updates) {
           const unit = skuUnitMap.get(productBase) || '';
           hojaHistorico.appendRow([new Date(), productBase, quantity, unit]);
         }
+
+        // Add to the list of products to return to the frontend
+        updatedProducts.push({
+            productBase: productBase,
+            quantity: quantity,
+            state: state
+        });
+
         successCount++;
       } catch (e) {
         errors.push(`Error con ${productBase}: ${e.message}`);
@@ -1108,7 +1117,7 @@ function saveStockUpdates(updates) {
       throw new Error(errors.join('; '));
     }
 
-    return { success: true, message: `${successCount} productos actualizados.` };
+    return { success: true, message: `${successCount} productos actualizados.`, updatedProducts: updatedProducts };
   } catch (e) {
     Logger.log(e.stack);
     return { success: false, error: e.message };
