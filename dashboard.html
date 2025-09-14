@@ -574,14 +574,21 @@
                             // 2. Find the item in our main data array and update it
                             const itemIndex = dashboardData.inventory.findIndex(item => item.baseProduct === updatedProd.productBase);
                             if (itemIndex > -1) {
-                                // Update "Inv. Ayer" with the newly saved stock value.
-                                // This value is now the most recent in the historical log.
+                                const item = dashboardData.inventory[itemIndex];
+
+                                // A. Update "Inv. Ayer" with the newly saved stock value.
                                 if (updatedProd.quantity !== null) {
-                                  dashboardData.inventory[itemIndex].lastInventory = updatedProd.quantity;
-                                  // Also update the expected stock for immediate visual feedback
-                                  const item = dashboardData.inventory[itemIndex];
-                                  item.expectedStock = item.lastInventory + item.purchases - item.sales;
+                                  item.lastInventory = updatedProd.quantity;
                                 }
+
+                                // B. If the item was just approved, apply the special math rules.
+                                if (updatedProd.state === 'aprobado') {
+                                    item.sales = 0;
+                                    item.purchases = 0;
+                                }
+
+                                // C. Recalculate expected stock for immediate visual feedback
+                                item.expectedStock = item.lastInventory + item.purchases - item.sales;
                             }
                         });
                     } else if (!response.success) {
