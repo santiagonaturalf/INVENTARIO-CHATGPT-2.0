@@ -933,27 +933,30 @@ function getDashboardData() {
     });
   }
 
-  // === 3) Ventas del día (lógica simple SUMAR.SI)
+  // === 3) Ventas del día (lógica simple solicitada por el usuario)
   const ventasPorBase = new Map();
   const ordersData = ordersSheet.getDataRange().getValues();
-  const ordersHeaders = ordersData[0].map(h => (''+h).trim());
+  const ordersHeaders = ordersData[0]; // No normalizar, buscar por nombre exacto
 
-  const idxProductoBase = ordersHeaders.indexOf('Producto Base'); // Col L
-  const idxCantidadVenta = ordersHeaders.indexOf('Cantidad (venta)'); // Col M
+  // Según el usuario: Cantidad es Col K, Producto Base es Col Z.
+  // Los índices en un array basado en 0 son 10 y 25.
+  const idxCantidad = 10; // Columna K
+  const idxProductoBase = 25; // Columna Z
 
-  if (idxProductoBase !== -1 && idxCantidadVenta !== -1) {
-    for (let i = 1; i < ordersData.length; i++) {
-      const row = ordersData[i];
-      const productoBase = row[idxProductoBase];
-      const cantidad = parseFloat(row[idxCantidadVenta]) || 0;
+  // Verificación de seguridad por si las columnas cambian
+  if (ordersHeaders[idxCantidad] !== 'Cantidad' || ordersHeaders[idxProductoBase] !== 'Producto Base') {
+    Logger.log(`ADVERTENCIA: La estructura de columnas en 'Orders' puede haber cambiado. Se esperaba 'Cantidad' en K y 'Producto Base' en Z.`);
+  }
 
-      if (productoBase && cantidad > 0) {
-        const key = (''+productoBase).trim();
-        ventasPorBase.set(key, (ventasPorBase.get(key) || 0) + cantidad);
-      }
+  for (let i = 1; i < ordersData.length; i++) {
+    const row = ordersData[i];
+    const productoBase = row[idxProductoBase];
+    const cantidad = parseFloat(row[idxCantidad]);
+
+    if (productoBase && !isNaN(cantidad) && cantidad > 0) {
+      const key = ('' + productoBase).trim();
+      ventasPorBase.set(key, (ventasPorBase.get(key) || 0) + cantidad);
     }
-  } else {
-      Logger.log("No se encontraron las columnas 'Producto Base' (L) o 'Cantidad (venta)' (M) en la hoja 'Orders'. Las ventas aparecerán en 0. Ejecuta 'Enriquecer Datos de Orders' primero.");
   }
 
   // === 4) Compras hoy (calculo F + H − E por Producto Base)
