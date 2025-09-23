@@ -896,19 +896,30 @@ function getDashboardData() {
   }
 
 
-  // === 1) Mapa SKU: {productoBase, cantidadVenta, unidadVenta, categoria}
-  const skuData = skuSheet.getRange(2, 1, Math.max(0, skuSheet.getLastRow()-1), 8).getValues();
+  // === 1) Mapa SKU y Mapa de Compras SKU
+  const skuData = skuSheet.getRange(2, 1, Math.max(0, skuSheet.getLastRow() - 1), 8).getValues();
   const skuMap = new Map();
   const baseInfoMap = new Map(); // Unifica la info por producto base
+  const mapaCompraSku = new Map(); // Key: 'Producto Base-Formato Adquisición', Value: cantAdquisicion
+
   skuData.forEach(r => {
     const nombreProd = r[0]; // Col A
     const productoBase = r[1]; // Col B
+    const formatoAdq = r[2]; // Col C
+    const cantAdq = parseFloat((r[3] || '0').toString().replace(',', '.')) || 0; // Col D
     const categoria = r[5]; // Col F
     const cantidadVenta = parseFloat((r[6] || '0').toString().replace(',', '.')) || 0;
-    const unidadVenta   = r[7] || '';
+    const unidadVenta = r[7] || '';
+
     if (nombreProd) skuMap.set(nombreProd, { productoBase, cantidadVenta, unidadVenta });
-    if (productoBase && !baseInfoMap.has(productoBase)) {
-      baseInfoMap.set(productoBase, { unit: unidadVenta, category: categoria });
+    if (productoBase) {
+      if (!baseInfoMap.has(productoBase)) {
+        baseInfoMap.set(productoBase, { unit: unidadVenta, category: categoria });
+      }
+      if (formatoAdq) {
+        const claveCompra = `${productoBase}-${formatoAdq}`;
+        mapaCompraSku.set(claveCompra, cantAdq);
+      }
     }
   });
 
@@ -959,8 +970,27 @@ function getDashboardData() {
     }
   }
 
-  // === 4) Compras hoy (calculo F + H − E por Producto Base)
-  const comprasPorBase = getComprasPorBase_SUMARSI_(adqSheet);
+  // === 4) Compras del día (lógica de Adquisiciones y SKU)
+  const comprasPorBase = new Map();
+  if (adqSheet && adqSheet.getLastRow() > 1) {
+    // Columnas: B=Producto Base, C=Formato de Compra, D=Cantidad a Comprar
+    const adqData = adqSheet.getRange(2, 1, adqSheet.getLastRow() - 1, 4).getValues();
+    adqData.forEach(fila => {
+      const productoBase = fila[1];
+      const formatoCompra = fila[2];
+      const cantidadComprada = parseFloat((fila[3] || '0').toString().replace(',', '.')) || 0;
+
+      if (productoBase && formatoCompra && cantidadComprada > 0) {
+        const claveCompra = `${productoBase}-${formatoCompra}`;
+        const cantAdquisicion = mapaCompraSku.get(claveCompra);
+
+        if (cantAdquisicion != null) { // Check for null/undefined, allowing 0
+          const compraEnUnidadBase = cantidadComprada * cantAdquisicion;
+          comprasPorBase.set(productoBase, (comprasPorBase.get(productoBase) || 0) + compraEnUnidadBase);
+        }
+      }
+    });
+  }
 
   // === 5) Armar inventory[] para el Dashboard
   const inventory = [];
