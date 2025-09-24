@@ -29,6 +29,13 @@ const TIMEZONE = "America/Santiago";
 // =====================================================================================
 
 /**
+ * Normaliza una cadena de texto: la convierte a minúsculas y elimina espacios en blanco al inicio y al final.
+ * @param {string} s La cadena a normalizar.
+ * @returns {string} La cadena normalizada.
+ */
+const norm = s => (s ?? '').toString().trim().toLowerCase();
+
+/**
  * Se ejecuta cuando se abre la hoja de cálculo.
  * Crea un menú personalizado para ejecutar las funciones principales.
  */
@@ -172,14 +179,14 @@ function calcularInventarioDiario() {
     datosSku.forEach(fila => {
       const [nombreProducto, productoBase, formatoAdq, cantAdq, , , cantVenta, unidadVenta] = fila;
       if (nombreProducto) {
-        mapaVentaSku.set(nombreProducto, {
+        mapaVentaSku.set(norm(nombreProducto), {
           productoBase: productoBase,
           cantVenta: parseFloat(cantVenta) || 0,
           unidadVenta: unidadVenta
         });
       }
       if (productoBase && formatoAdq) {
-        const claveCompra = `${productoBase.toString().trim()}-${formatoAdq.toString().trim()}`;
+        const claveCompra = `${norm(productoBase)}-${formatoAdq.toString().trim()}`;
         mapaCompraSku.set(claveCompra, parseFloat(String(cantAdq).replace(',','.')) || 0);
       }
     });
@@ -198,7 +205,7 @@ function calcularInventarioDiario() {
         const skuInfo = mapaVentaSku.get(nombreProductoVendido);
         if (skuInfo) {
           const ventaEnUnidadBase = cantidadVendida * skuInfo.cantVenta;
-          sumarAObjeto(ventasDelDia, skuInfo.productoBase, ventaEnUnidadBase);
+          sumarAObjeto(ventasDelDia, norm(skuInfo.productoBase), ventaEnUnidadBase);
         }
       }
     });
@@ -218,15 +225,14 @@ function calcularInventarioDiario() {
       if (!productoBase || !formatoCompra) return;
 
       // Extraer el formato base. Ej: "Paquete" de "Paquete (4 Kg)"
-      const formatoAdqMatch = formatoCompra.toString().match(/(.*) \(/);
-      const formatoAdq = formatoAdqMatch ? formatoAdqMatch[1].trim() : formatoCompra.toString().trim();
+      const formatoAdq = _getFormatoAdquisicionBase(formatoCompra);
 
-      const claveCompra = `${productoBase.toString().trim()}-${formatoAdq}`;
+      const claveCompra = `${norm(productoBase)}-${formatoAdq}`;
       const cantAdquisicion = mapaCompraSku.get(claveCompra);
 
       if (cantAdquisicion) {
         const compraEnUnidadBase = cantidadComprada * cantAdquisicion;
-        sumarAObjeto(comprasDelDia, productoBase.toString().trim(), compraEnUnidadBase);
+        sumarAObjeto(comprasDelDia, norm(productoBase), compraEnUnidadBase);
       }
     });
 
@@ -237,10 +243,13 @@ function calcularInventarioDiario() {
     for (let i = datosHistorico.length - 1; i >= 0; i--) {
         const fila = datosHistorico[i];
         const productoBase = fila[1];
-        if (!productosVistos.has(productoBase)) {
-            const stockReal = parseFloat(fila[2]); // Columna C es "Stock Real" en la nueva estructura
-            inventarioAyer[productoBase] = stockReal || 0;
-            productosVistos.add(productoBase);
+        if (productoBase) {
+            const key = norm(productoBase);
+            if (!productosVistos.has(key)) {
+                const stockReal = parseFloat(fila[2]); // Columna C es "Stock Real" en la nueva estructura
+                inventarioAyer[key] = stockReal || 0;
+                productosVistos.add(key);
+            }
         }
     }
 
@@ -470,7 +479,7 @@ function populateTotalCompradoEnAdquisiciones() {
   skuValues.forEach(fila => {
     const [, productoBase, formatoAdq, cantAdq] = fila; // B, C, D
     if (productoBase && formatoAdq) {
-      const pBase = productoBase.toString().trim();
+      const pBase = norm(productoBase);
       const fAdq = formatoAdq.toString().trim();
       mapaCompraSku.set(`${pBase}-${fAdq}`, parseFloat(String(cantAdq).replace(',','.')) || 0);
     }
@@ -486,8 +495,7 @@ function populateTotalCompradoEnAdquisiciones() {
 
     const cantidadComprada = parseFloat(String(cantidadCompradaStr).replace(',','.')) || 0;
 
-    const formatoAdqMatch = formatoCompra.toString().match(/(.*) \(/);
-    const formatoAdq = formatoAdqMatch ? formatoAdqMatch[1].trim() : formatoCompra.toString().trim();
+    const formatoAdq = _getFormatoAdquisicionBase(formatoCompra);
 
     const claveCompra = `${productoBase.toString().trim()}-${formatoAdq}`;
     const cantAdquisicion = mapaCompraSku.get(claveCompra);
@@ -522,6 +530,22 @@ function showDashboard() {
       .setWidth(1200)
       .setHeight(700);
   SpreadsheetApp.getUi().showModalDialog(html, 'Dashboard de Inventario v3');
+}
+
+/**
+ * Extrae el formato de adquisición base de una cadena de texto.
+ * Maneja casos como "Paquete (4 Kg)" -> "Paquete" y "Paquete de compra" -> "Paquete".
+ * @param {string} formatoCompra El texto completo del formato.
+ * @returns {string} El formato base normalizado.
+ */
+function _getFormatoAdquisicionBase(formatoCompra) {
+  if (!formatoCompra) return '';
+  const formatoStr = formatoCompra.toString();
+  const match = formatoStr.match(/(.*) \(/);
+  if (match && match[1]) {
+    return match[1].trim();
+  }
+  return formatoStr.trim().split(' ')[0];
 }
 
 
@@ -728,7 +752,6 @@ const CFG = {
 };
 
 /***** HELPERS *****/
-const norm = s => (s ?? '').toString().trim().toLowerCase();
 
 function getHeaderIndexes_(headerRow, headerMap) {
   const idx = {};
@@ -969,7 +992,7 @@ function getComprasPorBase_Correcto(adqSheet, skuSheet) {
   skuValues.forEach(fila => {
     const [, productoBase, formatoAdq, cantAdq] = fila; // B, C, D
     if (productoBase && formatoAdq) {
-      const pBase = productoBase.toString().trim();
+      const pBase = norm(productoBase);
       const fAdq = formatoAdq.toString().trim();
       mapaCompraSku.set(`${pBase}-${fAdq}`, parseFloat(String(cantAdq).replace(',','.')) || 0);
     }
@@ -981,12 +1004,11 @@ function getComprasPorBase_Correcto(adqSheet, skuSheet) {
     const [, productoBase, formatoCompra, cantidadCompradaStr] = fila; // B, C, D
     if (!productoBase || !formatoCompra) return;
 
-    const pBase = productoBase.toString().trim();
+    const pBase = norm(productoBase);
     const cantidadComprada = parseFloat(String(cantidadCompradaStr).replace(',','.')) || 0;
 
     // Extraer el formato base. Ej: "Paquete" de "Paquete (4 Kg)"
-    const formatoAdqMatch = formatoCompra.toString().match(/(.*) \(/);
-    const formatoAdq = formatoAdqMatch ? formatoAdqMatch[1].trim() : formatoCompra.toString().trim();
+    const formatoAdq = _getFormatoAdquisicionBase(formatoCompra);
 
     const claveCompra = `${pBase}-${formatoAdq}`;
     const cantAdquisicion = mapaCompraSku.get(claveCompra);
@@ -1031,9 +1053,9 @@ function getDashboardData() {
     const categoria = r[5]; // Col F
     const cantidadVenta = parseFloat((r[6] || '0').toString().replace(',', '.')) || 0;
     const unidadVenta   = r[7] || '';
-    if (nombreProd) skuMap.set(nombreProd, { productoBase, cantidadVenta, unidadVenta });
-    if (productoBase && !baseInfoMap.has(productoBase)) {
-      baseInfoMap.set(productoBase, { unit: unidadVenta, category: categoria });
+    if (nombreProd) skuMap.set(norm(nombreProd), { productoBase, cantidadVenta, unidadVenta });
+    if (productoBase && !baseInfoMap.has(norm(productoBase))) {
+      baseInfoMap.set(norm(productoBase), { original: productoBase, unit: unidadVenta, category: categoria });
     }
   });
 
@@ -1051,9 +1073,10 @@ function getDashboardData() {
       if (!base || isNaN(when.getTime())) return;
 
       const currentQty = !isNaN(realQty) ? realQty : qty;
-      const prev = lastInvMap.get(base);
+      const key = norm(base);
+      const prev = lastInvMap.get(key);
       if (!prev || when > prev.ts) {
-        lastInvMap.set(base, { ts: when, qty: currentQty });
+        lastInvMap.set(key, { ts: when, qty: currentQty });
       }
     });
   }
@@ -1079,7 +1102,7 @@ function getDashboardData() {
     const cantidad = parseFloat(row[idxCantidad]);
 
     if (productoBase && !isNaN(cantidad) && cantidad > 0) {
-      const key = ('' + productoBase).trim();
+      const key = norm(productoBase);
       ventasPorBase.set(key, (ventasPorBase.get(key) || 0) + cantidad);
     }
   }
@@ -1089,14 +1112,14 @@ function getDashboardData() {
 
   // === 5) Armar inventory[] para el Dashboard
   const inventory = [];
-  baseInfoMap.forEach((info, base) => {
-    const lastInv = lastInvMap.get(base);
+  baseInfoMap.forEach((info, key) => {
+    const lastInv = lastInvMap.get(key);
     const lastInventory = lastInv ? lastInv.qty : 0;
-    const sales    = ventasPorBase.get(base)   || 0;
-    const purchases= comprasPorBase.get(base)  || 0;
+    const sales    = ventasPorBase.get(key)   || 0;
+    const purchases= comprasPorBase.get(key)  || 0;
 
     inventory.push({
-      baseProduct:  base,
+      baseProduct:  info.original, // Usar el nombre original para mostrar
       lastInventory: lastInventory,
       purchases:    purchases,
       sales:        sales,
