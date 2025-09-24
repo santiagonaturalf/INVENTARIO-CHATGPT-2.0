@@ -218,8 +218,7 @@ function calcularInventarioDiario() {
       if (!productoBase || !formatoCompra) return;
 
       // Extraer el formato base. Ej: "Paquete" de "Paquete (4 Kg)"
-      const formatoAdqMatch = formatoCompra.toString().match(/(.*) \(/);
-      const formatoAdq = formatoAdqMatch ? formatoAdqMatch[1].trim() : formatoCompra.toString().trim();
+      const formatoAdq = _getFormatoAdquisicionBase(formatoCompra);
 
       const claveCompra = `${productoBase.toString().trim()}-${formatoAdq}`;
       const cantAdquisicion = mapaCompraSku.get(claveCompra);
@@ -486,8 +485,7 @@ function populateTotalCompradoEnAdquisiciones() {
 
     const cantidadComprada = parseFloat(String(cantidadCompradaStr).replace(',','.')) || 0;
 
-    const formatoAdqMatch = formatoCompra.toString().match(/(.*) \(/);
-    const formatoAdq = formatoAdqMatch ? formatoAdqMatch[1].trim() : formatoCompra.toString().trim();
+    const formatoAdq = _getFormatoAdquisicionBase(formatoCompra);
 
     const claveCompra = `${productoBase.toString().trim()}-${formatoAdq}`;
     const cantAdquisicion = mapaCompraSku.get(claveCompra);
@@ -522,6 +520,22 @@ function showDashboard() {
       .setWidth(1200)
       .setHeight(700);
   SpreadsheetApp.getUi().showModalDialog(html, 'Dashboard de Inventario v3');
+}
+
+/**
+ * Extrae el formato de adquisición base de una cadena de texto.
+ * Maneja casos como "Paquete (4 Kg)" -> "Paquete" y "Paquete de compra" -> "Paquete".
+ * @param {string} formatoCompra El texto completo del formato.
+ * @returns {string} El formato base normalizado.
+ */
+function _getFormatoAdquisicionBase(formatoCompra) {
+  if (!formatoCompra) return '';
+  const formatoStr = formatoCompra.toString();
+  const match = formatoStr.match(/(.*) \(/);
+  if (match && match[1]) {
+    return match[1].trim();
+  }
+  return formatoStr.trim().split(' ')[0];
 }
 
 
@@ -985,8 +999,7 @@ function getComprasPorBase_Correcto(adqSheet, skuSheet) {
     const cantidadComprada = parseFloat(String(cantidadCompradaStr).replace(',','.')) || 0;
 
     // Extraer el formato base. Ej: "Paquete" de "Paquete (4 Kg)"
-    const formatoAdqMatch = formatoCompra.toString().match(/(.*) \(/);
-    const formatoAdq = formatoAdqMatch ? formatoAdqMatch[1].trim() : formatoCompra.toString().trim();
+    const formatoAdq = _getFormatoAdquisicionBase(formatoCompra);
 
     const claveCompra = `${pBase}-${formatoAdq}`;
     const cantAdquisicion = mapaCompraSku.get(claveCompra);
