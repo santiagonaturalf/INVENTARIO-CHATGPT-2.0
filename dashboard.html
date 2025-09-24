@@ -203,10 +203,11 @@
 
             <input type="text" id="searchInput" placeholder="Buscar por Producto Base..." style="width: 100%; padding: 10px; margin-bottom: 20px; border: 1px solid var(--border-color); border-radius: 6px;">
 
-            <div style="display:flex; gap:16px; align-items:center; margin:10px 0;">
+            <div style="display:flex; gap:16px; align-items:center; margin:10px 0; flex-wrap: wrap;">
               <label><input type="checkbox" id="filterMovHoy"> Mostrar sólo con movimiento hoy</label>
               <label><input type="checkbox" id="hideApproved" checked> Ocultar verificados/aprobados</label>
               <label><input type="checkbox" id="viewCategories"> Visualizar Categorias</label>
+              <label><input type="checkbox" id="filterNegativeStock"> Mostrar sólo con stock negativo</label>
               <small style="opacity:.7;">(Los verificados/aprobados aparecen si los buscas por nombre)</small>
             </div>
 
@@ -234,7 +235,10 @@
 
             <!-- Botones -->
             <div id="footer-buttons" class="footer-buttons">
-                <button id="approve-selected-button" class="primary-button" style="margin-right: auto;">Aprobar Seleccionados</button>
+                <div style="margin-right: auto; display: flex; gap: 15px;">
+                    <button id="approve-selected-button" class="primary-button">Aprobar Seleccionados</button>
+                    <button id="zero-stock-button" class="secondary-button">Poner Stock en Cero</button>
+                </div>
                 <button class="secondary-button">🔄 Actualizar Datos</button>
             </div>
         </div>
@@ -249,6 +253,7 @@
             document.getElementById('filterMovHoy')?.addEventListener('change', renderInventoryTable);
             document.getElementById('hideApproved')?.addEventListener('change', renderInventoryTable);
             document.getElementById('viewCategories')?.addEventListener('change', renderInventoryTable);
+            document.getElementById('filterNegativeStock')?.addEventListener('change', renderInventoryTable);
             document.getElementById('searchInput')?.addEventListener('input', renderInventoryTable);
             document.querySelector('.secondary-button').addEventListener('click', cargarDatosDashboard);
             setupMassApproval(); // Set up the listener for the mass approval button
@@ -287,8 +292,15 @@
             if (!dashboardData?.inventory) return [];
             const onlyMov = document.getElementById('filterMovHoy')?.checked;
             const hideApproved = document.getElementById('hideApproved')?.checked;
+            const onlyNegative = document.getElementById('filterNegativeStock')?.checked;
             const q = getSearchText();
+
             return dashboardData.inventory.filter(item => {
+                // Filter by negative stock
+                if (onlyNegative && item.expectedStock >= 0) {
+                    return false;
+                }
+
                 const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
                 if (onlyMov && !(Number(item.sales) > 0 || Number(item.purchases) > 0)) return false;
                 const isApproved = (estado === 'verificando' || estado === 'aprobado');
@@ -716,6 +728,24 @@
                 }
                 setLoadingState(true);
                 handleItemSave(updates);
+            });
+
+            document.getElementById('zero-stock-button').addEventListener('click', function() {
+                const updates = [];
+                document.querySelectorAll('.mass-approval-checkbox:checked').forEach(cb => {
+                    const base = cb.dataset.base;
+                    updates.push({ productBase: base, quantity: 0, state: 'aprobado' });
+                });
+
+                if (updates.length === 0) {
+                    alert('Por favor, selecciona al menos un producto para poner el stock en cero.');
+                    return;
+                }
+
+                if (confirm(`¿Estás seguro de que quieres poner el stock de ${updates.length} producto(s) en cero? Esta acción no se puede deshacer.`)) {
+                    setLoadingState(true);
+                    handleItemSave(updates);
+                }
             });
         }
 
