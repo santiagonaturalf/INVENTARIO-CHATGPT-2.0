@@ -179,8 +179,8 @@ function calcularInventarioDiario() {
         });
       }
       if (productoBase && formatoAdq) {
-        const claveCompra = `${productoBase}-${formatoAdq}`;
-        mapaCompraSku.set(claveCompra, parseFloat(cantAdq) || 0);
+        const claveCompra = `${productoBase.toString().trim()}-${formatoAdq.toString().trim()}`;
+        mapaCompraSku.set(claveCompra, parseFloat(String(cantAdq).replace(',','.')) || 0);
       }
     });
 
@@ -193,7 +193,7 @@ function calcularInventarioDiario() {
       const fechaPedido = new Date(fila[8]); // Columna I: Fecha
       if (fechaPedido >= hoy) {
         const nombreProductoVendido = fila[9]; // Columna J: Nombre Producto
-        const cantidadVendida = parseFloat(fila[10]) || 0; // Columna K: Cantidad
+        const cantidadVendida = parseFloat(String(fila[10]).replace(',','.')) || 0; // Columna K: Cantidad
 
         const skuInfo = mapaVentaSku.get(nombreProductoVendido);
         if (skuInfo) {
@@ -213,14 +213,20 @@ function calcularInventarioDiario() {
       // Si la columna C es la fecha, sería: const fechaAdq = new Date(fila[2]);
       const productoBase = fila[1]; // Columna B: Producto Base
       const formatoCompra = fila[2]; // Columna C: Formato de Compra
-      const cantidadComprada = parseFloat(fila[3]) || 0; // Columna D: Cantidad a Comprar
+      const cantidadComprada = parseFloat(String(fila[3]).replace(',','.')) || 0; // Columna D: Cantidad a Comprar
 
-      const claveCompra = `${productoBase}-${formatoCompra}`;
+      if (!productoBase || !formatoCompra) return;
+
+      // Extraer el formato base. Ej: "Paquete" de "Paquete (4 Kg)"
+      const formatoAdqMatch = formatoCompra.toString().match(/(.*) \(/);
+      const formatoAdq = formatoAdqMatch ? formatoAdqMatch[1].trim() : formatoCompra.toString().trim();
+
+      const claveCompra = `${productoBase.toString().trim()}-${formatoAdq}`;
       const cantAdquisicion = mapaCompraSku.get(claveCompra);
 
       if (cantAdquisicion) {
         const compraEnUnidadBase = cantidadComprada * cantAdquisicion;
-        sumarAObjeto(comprasDelDia, productoBase, compraEnUnidadBase);
+        sumarAObjeto(comprasDelDia, productoBase.toString().trim(), compraEnUnidadBase);
       }
     });
 
@@ -443,7 +449,75 @@ function doGet(e) {
 /**
  * Lanza el dashboard v3 en un diálogo modal (ventana emergente).
  */
+
+/**
+ * Calcula y puebla la columna N de la hoja "Adquisiciones" con el total de la compra en unidades base (Kg).
+ * Se ejecuta antes de mostrar el dashboard para asegurar que los datos estén visibles y actualizados.
+ */
+function populateTotalCompradoEnAdquisiciones() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const adqSheet = ss.getSheetByName(HOJA_ADQUISICIONES);
+  const skuSheet = ss.getSheetByName(HOJA_SKU);
+
+  if (!adqSheet || adqSheet.getLastRow() < 2 || !skuSheet || skuSheet.getLastRow() < 2) {
+    Logger.log("No se pudieron encontrar las hojas Adquisiciones o SKU, o están vacías.");
+    return;
+  }
+
+  // 1. Crear mapa de búsqueda desde SKU
+  const mapaCompraSku = new Map();
+  const skuValues = skuSheet.getRange(2, 1, skuSheet.getLastRow() - 1, 4).getValues(); // A:D
+  skuValues.forEach(fila => {
+    const [, productoBase, formatoAdq, cantAdq] = fila; // B, C, D
+    if (productoBase && formatoAdq) {
+      const pBase = productoBase.toString().trim();
+      const fAdq = formatoAdq.toString().trim();
+      mapaCompraSku.set(`${pBase}-${fAdq}`, parseFloat(String(cantAdq).replace(',','.')) || 0);
+    }
+  });
+
+  // 2. Preparar los cálculos para la columna N
+  const adqValues = adqSheet.getRange(2, 1, adqSheet.getLastRow() - 1, 4).getValues(); // A:D
+  const resultadosColumnaN = adqValues.map(fila => {
+    const [, productoBase, formatoCompra, cantidadCompradaStr] = fila; // B, C, D
+    if (!productoBase || !formatoCompra) {
+      return [""]; // Devuelve un array con un elemento para que se escriba una celda vacía
+    }
+
+    const cantidadComprada = parseFloat(String(cantidadCompradaStr).replace(',','.')) || 0;
+
+    const formatoAdqMatch = formatoCompra.toString().match(/(.*) \(/);
+    const formatoAdq = formatoAdqMatch ? formatoAdqMatch[1].trim() : formatoCompra.toString().trim();
+
+    const claveCompra = `${productoBase.toString().trim()}-${formatoAdq}`;
+    const cantAdquisicion = mapaCompraSku.get(claveCompra);
+
+    if (cantAdquisicion) {
+      const compraEnUnidadBase = cantidadComprada * cantAdquisicion;
+      return [compraEnUnidadBase];
+    } else {
+      return [""]; // Si no se encuentra, celda vacía
+    }
+  });
+
+  // 3. Escribir los resultados en la columna N
+  // Primero, el encabezado si es necesario. La columna N es la 14.
+  const headerCell = adqSheet.getRange("N1");
+  if (headerCell.getValue() !== "Total Comprado (Kg)") {
+    headerCell.setValue("Total Comprado (Kg)").setFontWeight("bold");
+  }
+
+  // Limpiar contenido anterior y escribir nuevos valores
+  if (resultadosColumnaN.length > 0) {
+    const targetRange = adqSheet.getRange(2, 14, resultadosColumnaN.length, 1);
+    targetRange.clearContent();
+    targetRange.setValues(resultadosColumnaN);
+  }
+}
+
 function showDashboard() {
+  populateTotalCompradoEnAdquisiciones(); // Ejecutar el cálculo antes de mostrar
+
   const html = HtmlService.createHtmlOutputFromFile('dashboard.html')
       .setWidth(1200)
       .setHeight(700);
@@ -875,6 +949,57 @@ function getComprasPorBase_SUMARSI_(adqSheet) {
 // =====================================
 // getDashboardData CON COMPRAS INCLUIDO
 // =====================================
+
+/**
+ * Calcula las compras del día según la lógica solicitada:
+ * Para cada adquisición, multiplica la 'Cantidad a Comprar' por el multiplicador del SKU.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} adqSheet Hoja "Adquisiciones"
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} skuSheet Hoja "SKU"
+ * @returns {Map<string, number>} comprasPorBase
+ */
+function getComprasPorBase_Correcto(adqSheet, skuSheet) {
+  const comprasPorBase = new Map();
+  if (!adqSheet || adqSheet.getLastRow() < 2 || !skuSheet || skuSheet.getLastRow() < 2) {
+    return comprasPorBase;
+  }
+
+  // 1. Crear mapa de búsqueda desde SKU
+  const mapaCompraSku = new Map();
+  const skuValues = skuSheet.getRange(2, 1, skuSheet.getLastRow() - 1, 4).getValues(); // A:D
+  skuValues.forEach(fila => {
+    const [, productoBase, formatoAdq, cantAdq] = fila; // B, C, D
+    if (productoBase && formatoAdq) {
+      const pBase = productoBase.toString().trim();
+      const fAdq = formatoAdq.toString().trim();
+      mapaCompraSku.set(`${pBase}-${fAdq}`, parseFloat(String(cantAdq).replace(',','.')) || 0);
+    }
+  });
+
+  // 2. Procesar adquisiciones
+  const adqValues = adqSheet.getRange(2, 1, adqSheet.getLastRow() - 1, 4).getValues(); // A:D
+  adqValues.forEach(fila => {
+    const [, productoBase, formatoCompra, cantidadCompradaStr] = fila; // B, C, D
+    if (!productoBase || !formatoCompra) return;
+
+    const pBase = productoBase.toString().trim();
+    const cantidadComprada = parseFloat(String(cantidadCompradaStr).replace(',','.')) || 0;
+
+    // Extraer el formato base. Ej: "Paquete" de "Paquete (4 Kg)"
+    const formatoAdqMatch = formatoCompra.toString().match(/(.*) \(/);
+    const formatoAdq = formatoAdqMatch ? formatoAdqMatch[1].trim() : formatoCompra.toString().trim();
+
+    const claveCompra = `${pBase}-${formatoAdq}`;
+    const cantAdquisicion = mapaCompraSku.get(claveCompra);
+
+    if (cantAdquisicion) {
+      const compraEnUnidadBase = cantidadComprada * cantAdquisicion;
+      comprasPorBase.set(pBase, (comprasPorBase.get(pBase) || 0) + compraEnUnidadBase);
+    }
+  });
+
+  return comprasPorBase;
+}
+
 function getDashboardData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const skuSheet       = ss.getSheetByName(HOJA_SKU);
@@ -959,8 +1084,8 @@ function getDashboardData() {
     }
   }
 
-  // === 4) Compras hoy (calculo F + H − E por Producto Base)
-  const comprasPorBase = getComprasPorBase_SUMARSI_(adqSheet);
+  // === 4) Compras hoy (Cálculo correcto basado en Adquisiciones y SKU)
+  const comprasPorBase = getComprasPorBase_Correcto(adqSheet, skuSheet);
 
   // === 5) Armar inventory[] para el Dashboard
   const inventory = [];
