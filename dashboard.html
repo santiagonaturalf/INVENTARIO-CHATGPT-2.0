@@ -226,15 +226,55 @@
         let estadosMap = {}; // { baseProduct: 'pendiente'|'verificando'|'aprobado' }
 
         window.addEventListener('load', () => {
-            document.getElementById('filterMovHoy')?.addEventListener('change', renderInventoryTable);
-            document.getElementById('hideApproved')?.addEventListener('change', renderInventoryTable);
-            document.getElementById('viewCategories')?.addEventListener('change', renderInventoryTable);
-            document.getElementById('filterNegativeStock')?.addEventListener('change', renderInventoryTable);
-            document.getElementById('searchInput')?.addEventListener('input', renderInventoryTable);
+            // Restore previous UI state before doing anything else
+            loadUiState();
+
+            // Add event listeners that now also save state on change
+            document.getElementById('filterMovHoy')?.addEventListener('change', () => { saveUiState(); renderInventoryTable(); });
+            document.getElementById('hideApproved')?.addEventListener('change', () => { saveUiState(); renderInventoryTable(); });
+            document.getElementById('viewCategories')?.addEventListener('change', () => { saveUiState(); renderInventoryTable(); });
+            document.getElementById('filterNegativeStock')?.addEventListener('change', () => { saveUiState(); renderInventoryTable(); });
+            document.getElementById('searchInput')?.addEventListener('input', () => { saveUiState(); renderInventoryTable(); });
+
             document.querySelector('.secondary-button').addEventListener('click', cargarDatosDashboard);
             setupMassApproval(); // Set up the listener for the mass approval button
             cargarDatosDashboard();
         });
+
+        /**
+         * Saves the current state of UI filter controls to localStorage.
+         */
+        function saveUiState() {
+            const uiState = {
+                filterMovHoy: document.getElementById('filterMovHoy')?.checked,
+                hideApproved: document.getElementById('hideApproved')?.checked,
+                viewCategories: document.getElementById('viewCategories')?.checked,
+                filterNegativeStock: document.getElementById('filterNegativeStock')?.checked,
+                searchValue: document.getElementById('searchInput')?.value
+            };
+            localStorage.setItem('inventoryDashboardState', JSON.stringify(uiState));
+        }
+
+        /**
+         * Loads and applies UI filter state from localStorage on page load.
+         */
+        function loadUiState() {
+            try {
+                const savedState = localStorage.getItem('inventoryDashboardState');
+                if (savedState) {
+                    const uiState = JSON.parse(savedState);
+
+                    if (uiState.filterMovHoy !== undefined) document.getElementById('filterMovHoy').checked = uiState.filterMovHoy;
+                    if (uiState.hideApproved !== undefined) document.getElementById('hideApproved').checked = uiState.hideApproved;
+                    if (uiState.viewCategories !== undefined) document.getElementById('viewCategories').checked = uiState.viewCategories;
+                    if (uiState.filterNegativeStock !== undefined) document.getElementById('filterNegativeStock').checked = uiState.filterNegativeStock;
+                    if (uiState.searchValue !== undefined) document.getElementById('searchInput').value = uiState.searchValue;
+                }
+            } catch (e) {
+                console.error("Error loading UI state from localStorage:", e);
+                // No need to alert the user, just log it.
+            }
+        }
 
         function cargarDatosDashboard() {
             setLoadingState(true);
@@ -451,7 +491,7 @@
             addEventListeners();
         }
 
-        function handleItemSave(updates) {
+        function handleItemSave(updates, callback) {
             setLoadingState(true);
             google.script.run
                 .withSuccessHandler(response => {
@@ -488,11 +528,17 @@
                         alert("Error al guardar: " + (response.error || "Ocurrió un error desconocido."));
                     }
                     renderInventoryTable(); // Re-render with updated local data
+                    if (typeof callback === 'function') {
+                        callback();
+                    }
                 })
                 .withFailureHandler(err => {
                     setLoadingState(false);
                     alert("Error de comunicación con el servidor: " + err.message);
                     renderInventoryTable(); // Re-render even on failure to reset UI state
+                    if (typeof callback === 'function') {
+                        callback();
+                    }
                 })
                 .saveStockUpdates(updates);
         }
@@ -551,13 +597,60 @@
                         handleItemSave([{ productBase: base, quantity: quantity, state: null }]);
                     }
                 });
-                // Approve on Enter if not already approved
+                // Approve on Enter or Tab
                 input.addEventListener('keydown', function(event) {
+                    // --- Enter Key to Approve ---
                     if (event.key === 'Enter') {
                         event.preventDefault();
                         if (estadosMap[base] !== 'aprobado') {
                             const checkbox = this.closest('tr').querySelector('.approval-checkbox');
-                            checkbox.click();
+                            checkbox.click(); // This triggers validation and handleItemSave
+                        }
+                    }
+
+                    // --- Tab Key to Approve and Advance ---
+                    if (event.key === 'Tab' && !event.shiftKey) {
+                        event.preventDefault();
+
+                        // 1. Find next input's base product name before doing anything async
+                        const allVisibleRows = Array.from(tbody.querySelectorAll('tr[data-product-base]'));
+                        const currentRow = this.closest('tr');
+                        const currentIndex = allVisibleRows.findIndex(row => row === currentRow);
+                        let nextInputBase = null;
+                        if (currentIndex > -1 && currentIndex < allVisibleRows.length - 1) {
+                            const nextRow = allVisibleRows[currentIndex + 1];
+                            nextInputBase = nextRow.dataset.productBase;
+                        }
+
+                        // 2. Define the callback to run after save and re-render
+                        const focusNextInput = () => {
+                            if (nextInputBase) {
+                                // We query the DOM again because the table has been re-rendered
+                                const nextInput = document.querySelector(`tr[data-product-base="${nextInputBase}"] .real-stock-input`);
+                                if (nextInput) {
+                                    nextInput.focus();
+                                    nextInput.select();
+                                }
+                            }
+                        };
+
+                        // 3. Validate the current row's input
+                        const quantity = parseFloat(this.value);
+                        if (isNaN(quantity)) {
+                            alert('Por favor, introduce un número válido en "Stock Real" antes de aprobar.');
+                            return;
+                        }
+                        if (quantity < 0) {
+                            alert('El Stock Real no puede ser negativo.');
+                            return;
+                        }
+
+                        // 4. Only save if it's a new approval OR if the value has been changed
+                        if (estadosMap[base] !== 'aprobado' || this.dataset.isDirty === 'true') {
+                             handleItemSave([{ productBase: base, quantity: quantity, state: 'aprobado' }], focusNextInput);
+                        } else {
+                            // If it's already approved and unchanged, just move to the next input without saving
+                            focusNextInput();
                         }
                     }
                 });
