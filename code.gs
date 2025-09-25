@@ -90,7 +90,7 @@ function setup() {
 
   // --- 5. Hoja de Reporte Hoy ---
   const hojaReporte = obtenerOCrearHoja(ss, HOJA_REPORTE_HOY);
-  const encabezadosReporte = ["Producto Base", "Inventario Ayer", "Compras del Día", "Ventas del Día", "Inventario Hoy", "Stock Real", "Discrepancias"];
+  const encabezadosReporte = ["Producto Base", "Inventario Ayer", "Compras del Día", "Ventas del Día", "Inventario Hoy (estimado)", "Stock Real", "Discrepancias"];
   if (hojaReporte.getRange("A1").getValue() === "") {
     hojaReporte.getRange(1, 1, 1, encabezadosReporte.length).setValues([encabezadosReporte]).setFontWeight("bold");
   }
@@ -228,28 +228,39 @@ function calcularInventarioDiario() {
       }
     }
 
-    // --- 6. ACTUALIZAR COLUMNA "VENTAS DEL DÍA" EN REPORTE HOY ---
-    if (hojaReporteHoy.getLastRow() > 1) {
-      const rangoReporte = hojaReporteHoy.getRange(2, 1, hojaReporteHoy.getLastRow() - 1, 4);
-      const valoresReporte = rangoReporte.getValues();
-      const nuevasVentas = [];
+    // --- 6. CONSTRUIR Y ESCRIBIR EL REPORTE COMPLETO ---
+    const reporteFinal = [];
+    // Iterar sobre todos los productos base definidos en la hoja SKU
+    for (const [productoNorm, productoOriginal] of baseOriginalNames.entries()) {
+      const invAyer = inventarioAyer.get(productoNorm) || 0;
+      const compras = comprasDelDia.get(productoNorm) || 0;
+      const ventas = ventasPorProductoBase.get(productoNorm) || 0;
+      const invHoyEstimado = invAyer + compras - ventas;
 
-      for(const row of valoresReporte) {
-        const productoBase = row[0];
-        const productoBaseNorm = normalizeText(productoBase);
-        const venta = ventasPorProductoBase.get(productoBaseNorm) || 0;
-        nuevasVentas.push([venta]);
-      }
-
-      hojaReporteHoy.getRange(2, 4, nuevasVentas.length, 1).setValues(nuevasVentas);
+      reporteFinal.push([
+        productoOriginal,    // Producto Base
+        invAyer,             // Inventario Ayer
+        compras,             // Compras del Día
+        ventas,              // Ventas del Día
+        invHoyEstimado,      // Inventario Hoy (estimado)
+        '',                  // Stock Real (vacío para llenado manual)
+        ''                   // Discrepancias (vacío para llenado manual)
+      ]);
     }
 
-    // --- 7. (Opcional) Refrescar cálculos dependientes si es necesario ---
-    // Si otras columnas dependen de "Ventas del Día" y no se recalculan solas,
-    // se podría necesitar un flush o re-setear fórmulas. Por ahora, se asume que las fórmulas
-    // en la hoja se actualizan automáticamente.
+    // Ordenar el reporte alfabéticamente por el nombre del producto
+    reporteFinal.sort((a, b) => a[0].localeCompare(b[0]));
 
-    ui.showModalDialog(HtmlService.createHtmlOutput('<h3>¡Éxito!</h3><p>El cálculo de "Ventas del Día" ha finalizado y la columna ha sido actualizada.</p>'), 'Proceso Completado');
+    // Limpiar la hoja (excepto encabezados) y escribir los nuevos datos
+    if (hojaReporteHoy.getLastRow() > 1) {
+      hojaReporteHoy.getRange(2, 1, hojaReporteHoy.getLastRow() - 1, 7).clearContent();
+    }
+
+    if (reporteFinal.length > 0) {
+      hojaReporteHoy.getRange(2, 1, reporteFinal.length, 7).setValues(reporteFinal);
+    }
+
+    ui.showModalDialog(HtmlService.createHtmlOutput('<h3>¡Éxito!</h3><p>El "Reporte Hoy" ha sido calculado y actualizado correctamente.</p>'), 'Proceso Completado');
     Utilities.sleep(4000);
     const activeDoc = SpreadsheetApp.getActive();
     const html = HtmlService.createHtmlOutput("<script>google.script.host.close()</script>");
