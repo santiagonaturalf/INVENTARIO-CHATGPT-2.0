@@ -51,37 +51,7 @@ function onOpen() {
       .addToUi();
 }
 
-/**
- * Se ejecuta automáticamente cuando un usuario edita una celda en la hoja de cálculo.
- * Si la edición ocurre en la columna "Stock Real" de "Reporte Hoy", actualiza
- * el estado del producto en la hoja "Estados".
- * @param {object} e El objeto de evento de Google Apps Script.
- */
-function onEdit(e) {
-  const range = e.range;
-  const sheet = range.getSheet();
-  const sheetName = sheet.getName();
-
-  // Verificar la hoja, la columna (F = 6) y la fila (mayor que 1 para evitar el encabezado)
-  if (sheetName === HOJA_REPORTE_HOY && range.getColumn() === 6 && range.getRow() > 1) {
-    const productBase = sheet.getRange(range.getRow(), 1).getValue();
-    const newValue = e.value;
-
-    if (!productBase) {
-      return; // No hay producto base en esta fila, no hacer nada.
-    }
-
-    // Determinar el nuevo estado. Si la celda está vacía o no es un número, es 'pendiente'.
-    const newState = (newValue !== null && newValue !== "" && !isNaN(parseFloat(newValue))) ? 'aprobado' : 'pendiente';
-
-    // Actualizar la hoja de Estados usando la función helper existente.
-    try {
-      setEstadoProducto(productBase, newState, 'Actualizado por onEdit');
-    } catch (error) {
-      Logger.log(`Error al actualizar estado para ${productBase} vía onEdit: ${error.message}`);
-    }
-  }
-}
+// onEdit ya no es necesario porque el estado se deriva directamente de la presencia de datos en 'Stock Real'.
 
 /**
  * Archiva el estado de "Reporte Hoy" en "Inventario Histórico", manteniendo un historial de 7 días
@@ -235,12 +205,7 @@ function setup() {
     hojaDiscrepancias.getRange(1, 1, 1, encabezadosDiscrepancias.length).setValues([encabezadosDiscrepancias]).setFontWeight("bold");
   }
 
-  // Hoja Estados (persistencia de verificación/aprobación)
-  const hojaEstados = obtenerOCrearHoja(ss, 'Estados');
-  const headers = ['Producto Base','Estado','Notas','Usuario','Timestamp'];
-  if (hojaEstados.getRange(1,1,1,headers.length).isBlank()) {
-    hojaEstados.getRange(1,1,1,headers.length).setValues([headers]).setFontWeight('bold');
-  }
+  // La creación de la hoja 'Estados' ha sido eliminada ya que es obsoleta.
 
   // --- Hoja de Clientes Notificados (para el dashboard de contacto) ---
   const hojaNotificados = obtenerOCrearHoja(ss, "ClientesNotificados");
@@ -294,25 +259,7 @@ function calcularInventarioDiario() {
   ui.showModalDialog(HtmlService.createHtmlOutput('<h3>Procesando inventario...</h3><p>Este proceso puede tardar unos minutos. Por favor, no cierres la hoja.</p>'), 'Cálculo de Inventario en Curso');
 
   try {
-    // --- INICIO: Limpiar estados aprobados al iniciar el día ---
-    const hojaEstados = ss.getSheetByName('Estados');
-    if (hojaEstados && hojaEstados.getLastRow() > 1) {
-      const data = hojaEstados.getDataRange().getValues();
-      const rowsToDelete = [];
-      // Itera desde la segunda fila (índice 1) para saltar el encabezado.
-      for (let i = 1; i < data.length; i++) {
-        // El estado está en la columna B (índice 1).
-        if (data[i][1] && data[i][1].toString().toLowerCase() === 'aprobado') {
-          // Se guarda el número de fila real (i + 1).
-          rowsToDelete.push(i + 1);
-        }
-      }
-      // Elimina las filas en orden inverso para evitar problemas con los índices.
-      for (let i = rowsToDelete.length - 1; i >= 0; i--) {
-        hojaEstados.deleteRow(rowsToDelete[i]);
-      }
-    }
-    // --- FIN: Limpieza ---
+    // El bloque de limpieza de la hoja 'Estados' se ha eliminado.
 
     // --- 1. OBTENER DATOS ---
     const hojaSku = ss.getSheetByName(HOJA_SKU);
@@ -796,74 +743,9 @@ function indexByHeader(sheet, headerName) {
   return idx; // -1 si no existe
 }
 
-/**
- * Devuelve un Map<string, string> de estados por producto base.
- * Estados posibles: 'pendiente' (por defecto), 'verificando', 'aprobado'
- */
-function getEstadosProductos_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = ss.getSheetByName('Estados');
-  if (!sh || sh.getLastRow() < 2) return new Map();
-  const rows = sh.getRange(2,1, sh.getLastRow()-1, 5).getValues();
-  const map = new Map();
-  rows.forEach(([base, estado]) => {
-    // Usar el nombre normalizado como clave para que no haya distinción de mayúsculas/minúsculas
-    if (base) map.set(norm(base), (estado || 'pendiente').toString().toLowerCase());
-  });
-  return map;
-}
-
-/** Devuelve los estados como objeto { [baseProduct]: estado } para el dashboard. */
-function getEstadosParaUI() {
-  const m = getEstadosProductos_();
-  const obj = {};
-  m.forEach((v,k)=> obj[k]=v);
-  return obj;
-}
-
-/**
- * Actualiza el estado de un producto base.
- * @param {string} baseProduct
- * @param {'pendiente'|'verificando'|'aprobado'} estado
- * @param {string=} notas
- */
-function setEstadoProducto(baseProduct, estado, notas) {
-  if (!baseProduct) throw new Error('Producto Base vacío.');
-  const baseProductNorm = norm(baseProduct);
-  estado = (estado || 'pendiente').toLowerCase();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = ss.getSheetByName('Estados') || ss.insertSheet('Estados');
-
-  // Asegurar headers
-  if (sh.getLastRow() === 0) {
-    sh.getRange(1,1,1,5).setValues([['Producto Base','Estado','Notas','Usuario','Timestamp']]);
-  }
-
-  // Buscar si ya existe
-  const lastRow = sh.getLastRow();
-  if (lastRow >= 2) {
-    const data = sh.getRange(2,1,lastRow-1,5).getValues();
-    for (let i=0;i<data.length;i++){
-      if (norm(data[i][0]) === baseProductNorm){
-        sh.getRange(i+2,2).setValue(estado);
-        if (notas !== undefined) sh.getRange(i+2,3).setValue(notas);
-        sh.getRange(i+2,4).setValue(Session.getActiveUser().getEmail() || 'Sistema');
-        sh.getRange(i+2,5).setValue(new Date());
-        return {ok:true};
-      }
-    }
-  }
-
-  // Insertar nueva fila
-  sh.appendRow([
-    baseProduct, // Guardar el nombre original
-    estado,
-    notas || '',
-    Session.getActiveUser().getEmail() || 'Sistema',
-    new Date()
-  ]);
-  return {ok:true};
-}
+// Las funciones getEstadosProductos_, getEstadosParaUI, y setEstadoProducto han sido eliminadas
+// ya que el sistema de 'Estados' ha sido reemplazado por la lógica de colores rojo/verde
+// basada en el contenido de la celda "Stock Real" en "Reporte Hoy".
 
 // =====================================================================================
 // LÓGICA DE CÁLCULO DE VENTAS (NUEVO)
@@ -1280,21 +1162,19 @@ function getDashboardData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const skuSheet = ss.getSheetByName(HOJA_SKU);
   const reporteSheet = ss.getSheetByName(HOJA_REPORTE_HOY);
-  const histSheet = ss.getSheetByName(HOJA_HISTORICO);
 
   if (!skuSheet || !reporteSheet) {
     throw new Error(`No se encontraron las hojas requeridas: ${HOJA_SKU} o ${HOJA_REPORTE_HOY}.`);
   }
-
   if (skuSheet.getLastRow() < 2) {
-    return { inventory: [], estados: {}, error: `La hoja "${HOJA_SKU}" está vacía o solo contiene encabezados.` };
+    return { inventory: [], error: `La hoja "${HOJA_SKU}" está vacía.` };
   }
   if (reporteSheet.getLastRow() < 2) {
-    return { inventory: [], estados: {}, error: `La hoja "${HOJA_REPORTE_HOY}" está vacía. Ejecute el cálculo diario primero.` };
+    return { inventory: [], error: `La hoja "${HOJA_REPORTE_HOY}" está vacía.` };
   }
 
-  // === 1) Mapa SKU: {original, unit, category} por producto base normalizado
-  const skuData = skuSheet.getRange(2, 1, Math.max(0, skuSheet.getLastRow() - 1), 8).getValues();
+  // 1. Mapa de información de SKU
+  const skuData = skuSheet.getRange(2, 1, skuSheet.getLastRow() - 1, 8).getValues();
   const baseInfoMap = new Map();
   skuData.forEach(r => {
     const productoBase = r[1]; // Col B
@@ -1305,27 +1185,46 @@ function getDashboardData() {
     }
   });
 
-  // === 2) Leer datos del "Reporte Hoy" y crear un mapa (incluyendo Stock Real)
-  const reporteData = reporteSheet.getRange(2, 1, reporteSheet.getLastRow() - 1, 6).getValues(); // Leer hasta la columna F
+  // 2. Leer datos del "Reporte Hoy" y crear mapa
+  const reporteData = reporteSheet.getRange(2, 1, reporteSheet.getLastRow() - 1, 6).getValues(); // A:F
   const reporteMap = new Map();
   reporteData.forEach(row => {
     const [productoBase, invAyer, compras, ventas, invEstimado, stockReal] = row;
     if (productoBase) {
+      const stockRealValue = (stockReal === null || stockReal === "") ? null : parseFloat(String(stockReal).replace(',', '.'));
       reporteMap.set(norm(productoBase), {
         lastInventory: parseFloat(String(invAyer || '0').replace(',', '.')) || 0,
         purchases: parseFloat(String(compras || '0').replace(',', '.')) || 0,
         sales: parseFloat(String(ventas || '0').replace(',', '.')) || 0,
         expectedStock: parseFloat(String(invEstimado || '0').replace(',', '.')) || 0,
-        stockReal: stockReal // Guardar el valor de Stock Real
+        stockReal: stockRealValue
       });
     }
   });
 
-  // === 3) Armar inventory[] para el Dashboard
+  // 3. Construir el array de inventario para el dashboard
   const inventory = [];
   baseInfoMap.forEach((info, key) => {
     const reporteInfo = reporteMap.get(key);
     const hasError = !reporteInfo;
+
+    let rowColor = 'red'; // Por defecto es rojo
+    let displayStock;
+
+    if (!hasError) {
+        if (reporteInfo.stockReal !== null && !isNaN(reporteInfo.stockReal)) {
+            // Si hay un valor numérico en Stock Real, la fila es verde y usamos ese valor
+            rowColor = 'green';
+            displayStock = reporteInfo.stockReal;
+        } else {
+            // Si no, la fila es roja y usamos el inventario estimado
+            rowColor = 'red';
+            displayStock = reporteInfo.expectedStock;
+        }
+    } else {
+        // Si hay error (no se encuentra en el reporte), se mantiene rojo y el stock es 0
+        displayStock = 0;
+    }
 
     inventory.push({
       baseProduct: info.original,
@@ -1336,36 +1235,22 @@ function getDashboardData() {
       unit: info.unit,
       category: info.category,
       error: hasError,
-      errorMsg: hasError ? "Producto no encontrado en el reporte de hoy." : ""
+      errorMsg: hasError ? "Producto no encontrado en el reporte de hoy." : "",
+      rowColor: rowColor,
+      displayStock: displayStock
     });
   });
 
-  // === 4) Lógica de estados (simplificada) ---
-  // La fuente de la verdad para el estado de un producto es la hoja "Estados".
-  // Esta función simplemente lee los estados persistidos y los devuelve.
-  // El reseteo de estados "aprobados" ahora se maneja exclusivamente en `calcularInventarioDiario`.
-  const persistedStates = getEstadosParaUI(); // Devuelve { [normalizedBase]: state }
-  const finalStates = {};
-
-  baseInfoMap.forEach((info, baseNorm) => {
-    // El nombre original del producto (con mayúsculas/minúsculas) se usa como clave en el objeto final.
-    // El estado se busca usando el nombre normalizado. Si no se encuentra, se asume 'pendiente'.
-    finalStates[info.original] = persistedStates[baseNorm] || 'pendiente';
-  });
-
+  // Ya no se devuelve 'estados', 'sales', o 'acquisitions'
   return {
-    inventory: inventory,
-    sales: [], // Estos ya no se calculan aquí, se devuelven vacíos
-    acquisitions: [], // Estos ya no se calculan aquí, se devuelven vacíos
-    estados: finalStates
+    inventory: inventory
   };
 }
 
 /**
  * Guarda las actualizaciones de stock desde el dashboard.
- * Esta función ahora solo actualiza la columna "Stock Real" en "Reporte Hoy".
- * La actualización de "Estados" se maneja por el disparador onEdit.
- * La actualización de "Inventario Histórico" se maneja por "CERRAR DIA".
+ * Esta función actualiza directamente la columna "Stock Real" en la hoja "Reporte Hoy".
+ * El sistema de estados ya no existe.
  */
 function saveStockUpdates(updates) {
   if (!updates || !Array.isArray(updates) || updates.length === 0) {
@@ -1380,11 +1265,9 @@ function saveStockUpdates(updates) {
       throw new Error(`La hoja "${HOJA_REPORTE_HOY}" no fue encontrada.`);
     }
 
-    // 1. Leer los datos de la hoja de reporte para encontrar las filas correctas.
     const reporteRange = reporteSheet.getDataRange();
     const reporteData = reporteRange.getValues();
 
-    // 2. Crear un mapa para buscar la fila de cada producto rápidamente.
     const productRowMap = new Map();
     reporteData.forEach((row, index) => {
       const productName = row[0]; // Columna A
@@ -1393,8 +1276,7 @@ function saveStockUpdates(updates) {
       }
     });
 
-    // 3. Procesar las actualizaciones en la matriz en memoria.
-    const updatedProductsForFe = []; // Para la respuesta al frontend
+    let updatedCount = 0;
     updates.forEach(update => {
       const { productBase, quantity } = update;
       const productNorm = norm(productBase);
@@ -1403,22 +1285,16 @@ function saveStockUpdates(updates) {
         const rowIndex = productRowMap.get(productNorm);
         // Columna F (Stock Real) es el índice 5 en el array 0-based.
         reporteData[rowIndex][5] = (quantity === null || quantity === undefined) ? '' : quantity;
-
-        // El frontend todavía espera un objeto de respuesta, así que lo preparamos.
-        updatedProductsForFe.push({
-          productBase: productBase,
-          quantity: quantity,
-          // El estado se actualizará visualmente por el `onEdit` y el siguiente `getDashboardData`,
-          // pero podemos devolver 'aprobado' para una respuesta más rápida de la UI.
-          state: (quantity !== null && quantity !== '') ? 'aprobado' : 'pendiente'
-        });
+        updatedCount++;
       }
     });
 
-    // 4. Escribir toda la matriz de datos actualizada de vuelta a la hoja.
-    reporteRange.setValues(reporteData);
+    // Escribir la matriz de datos actualizada de vuelta a la hoja solo si hubo cambios.
+    if (updatedCount > 0) {
+      reporteRange.setValues(reporteData);
+    }
 
-    return { success: true, message: `${updates.length} productos actualizados en 'Reporte Hoy'.`, updatedProducts: updatedProductsForFe };
+    return { success: true, message: `${updatedCount} productos actualizados en 'Reporte Hoy'.` };
 
   } catch (e) {
     Logger.log(`Error en saveStockUpdates: ${e.stack}`);
