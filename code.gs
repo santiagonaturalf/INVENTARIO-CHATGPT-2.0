@@ -43,11 +43,144 @@ function onOpen() {
   SpreadsheetApp.getUi()
       .createMenu('Inventario 2.0')
       .addItem('INICIAR DIA', 'calcularInventarioDiario')
+      .addItem('CERRAR DIA', 'cerrarDia')
       .addSeparator()
       .addItem('Abrir Dashboard de Inventario', 'showDashboard')
       .addSeparator()
       .addItem('Contactar Cliente (dashboard)', 'openContactarCliente')
       .addToUi();
+}
+
+/**
+ * Se ejecuta automáticamente cuando un usuario edita una celda en la hoja de cálculo.
+ * Si la edición ocurre en la columna "Stock Real" de "Reporte Hoy", actualiza
+ * el estado del producto en la hoja "Estados".
+ * @param {object} e El objeto de evento de Google Apps Script.
+ */
+function onEdit(e) {
+  const range = e.range;
+  const sheet = range.getSheet();
+  const sheetName = sheet.getName();
+
+  // Verificar la hoja, la columna (F = 6) y la fila (mayor que 1 para evitar el encabezado)
+  if (sheetName === HOJA_REPORTE_HOY && range.getColumn() === 6 && range.getRow() > 1) {
+    const productBase = sheet.getRange(range.getRow(), 1).getValue();
+    const newValue = e.value;
+
+    if (!productBase) {
+      return; // No hay producto base en esta fila, no hacer nada.
+    }
+
+    // Determinar el nuevo estado. Si la celda está vacía o no es un número, es 'pendiente'.
+    const newState = (newValue !== null && newValue !== "" && !isNaN(parseFloat(newValue))) ? 'aprobado' : 'pendiente';
+
+    // Actualizar la hoja de Estados usando la función helper existente.
+    try {
+      setEstadoProducto(productBase, newState, 'Actualizado por onEdit');
+    } catch (error) {
+      Logger.log(`Error al actualizar estado para ${productBase} vía onEdit: ${error.message}`);
+    }
+  }
+}
+
+/**
+ * Archiva el estado actual de "Reporte Hoy" en "Inventario Histórico".
+ * Esta función está pensada para ser ejecutada manualmente al final del día.
+ */
+function cerrarDia() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+
+  try {
+    const reporteSheet = ss.getSheetByName(HOJA_REPORTE_HOY);
+    const histSheet = ss.getSheetByName(HOJA_HISTORICO);
+    const skuSheet = ss.getSheetByName(HOJA_SKU);
+
+    if (!reporteSheet || !histSheet || !skuSheet) {
+      throw new Error("No se encontraron una o más hojas requeridas: Reporte Hoy, Inventario Histórico, SKU.");
+    }
+
+    if (reporteSheet.getLastRow() < 2) {
+      ui.alert("La hoja 'Reporte Hoy' está vacía. No hay nada que archivar.");
+      return;
+    }
+
+    // 1. Read data from sheets
+    const reporteData = reporteSheet.getRange(2, 1, reporteSheet.getLastRow() - 1, 6).getValues(); // A:F
+    const skuData = skuSheet.getRange(2, 1, skuSheet.getLastRow() - 1, 8).getValues(); // A:H
+
+    // 2. Create a map for SKU units for quick lookup
+    const skuUnitMap = new Map(skuData.map(row => [norm(row[1]), row[7]])); // Map: normalized product base -> unit
+
+    // 3. Prepare new historical records
+    const newHistoricalRecords = [];
+    const timestamp = new Date();
+
+    reporteData.forEach(row => {
+      const productBase = row[0];
+      const stockReal = row[5]; // Column F
+
+      // Only process rows where a "Stock Real" has been entered
+      if (productBase && (stockReal !== null && stockReal !== "" && !isNaN(parseFloat(stockReal)))) {
+        const unit = skuUnitMap.get(norm(productBase)) || '';
+        newHistoricalRecords.push([
+          timestamp,
+          productBase,
+          parseFloat(stockReal),
+          unit
+        ]);
+      }
+    });
+
+    if (newHistoricalRecords.length === 0) {
+      ui.alert("No hay productos con 'Stock Real' para archivar. No se realizó ninguna acción.");
+      return;
+    }
+
+    // 4. Append new records in a single batch
+    histSheet.getRange(histSheet.getLastRow() + 1, 1, newHistoricalRecords.length, 4).setValues(newHistoricalRecords);
+
+    // 5. Clean up old historical data (keep last 5 per product)
+    const allHistData = histSheet.getDataRange().getValues();
+    allHistData.shift(); // Remove header for processing
+
+    const histMap = new Map();
+    // Re-map all historical data including the newly added ones
+    allHistData.forEach((row, index) => {
+      const base = row[1];
+      if (base) {
+        const baseNorm = norm(base);
+        if (!histMap.has(baseNorm)) histMap.set(baseNorm, []);
+        // Store original row index (add 2 because we shifted header and it's 1-based)
+        histMap.get(baseNorm).push({ rowIndex: index + 2, timestamp: new Date(row[0]) });
+      }
+    });
+
+    const rowsToDelete = new Set();
+    histMap.forEach(entries => {
+      if (entries.length > 5) {
+        // Sort by date ascending to find the oldest
+        entries.sort((a, b) => a.timestamp - b.timestamp);
+        const toDeleteCount = entries.length - 5;
+        for (let i = 0; i < toDeleteCount; i++) {
+          rowsToDelete.add(entries[i].rowIndex);
+        }
+      }
+    });
+
+    // Delete rows in reverse order to avoid index shifts
+    if (rowsToDelete.size > 0) {
+      Array.from(rowsToDelete).sort((a, b) => b - a).forEach(rowIndex => {
+        histSheet.deleteRow(rowIndex);
+      });
+    }
+
+    ui.alert(`¡Día cerrado con éxito! Se han archivado ${newHistoricalRecords.length} registros en el Inventario Histórico.`);
+
+  } catch (e) {
+    Logger.log(`Error en cerrarDia: ${e.message}`);
+    ui.alert(`Ocurrió un error al cerrar el día: ${e.message}`);
+  }
 }
 
 /**
@@ -1228,6 +1361,12 @@ function getDashboardData() {
   };
 }
 
+/**
+ * Guarda las actualizaciones de stock desde el dashboard.
+ * Esta función ahora solo actualiza la columna "Stock Real" en "Reporte Hoy".
+ * La actualización de "Estados" se maneja por el disparador onEdit.
+ * La actualización de "Inventario Histórico" se maneja por "CERRAR DIA".
+ */
 function saveStockUpdates(updates) {
   if (!updates || !Array.isArray(updates) || updates.length === 0) {
     return { success: false, error: "No se proporcionaron datos para actualizar." };
@@ -1235,151 +1374,54 @@ function saveStockUpdates(updates) {
 
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const hojaReporte = ss.getSheetByName(HOJA_REPORTE_HOY);
-    const hojaDiscrepancias = ss.getSheetByName("Discrepancias");
-    const hojaHistorico = ss.getSheetByName(HOJA_HISTORICO);
-    const hojaSku = ss.getSheetByName(HOJA_SKU);
-    const hojaEstados = ss.getSheetByName('Estados');
+    const reporteSheet = ss.getSheetByName(HOJA_REPORTE_HOY);
 
-    // === 1. READ ALL DATA (IN-MEMORY) ===
-    const reporteRange = hojaReporte.getDataRange();
+    if (!reporteSheet) {
+      throw new Error(`La hoja "${HOJA_REPORTE_HOY}" no fue encontrada.`);
+    }
+
+    // 1. Leer los datos de la hoja de reporte para encontrar las filas correctas.
+    const reporteRange = reporteSheet.getDataRange();
     const reporteData = reporteRange.getValues();
 
-    const histRange = hojaHistorico.getDataRange();
-    const histData = histRange.getValues();
-
-    const skuData = hojaSku.getRange(2, 1, hojaSku.getLastRow() - 1, 8).getValues();
-
-    const estadosRange = hojaEstados.getDataRange();
-    const estadosData = hojaEstados.getLastRow() > 0 ? estadosRange.getValues() : [['Producto Base','Estado','Notas','Usuario','Timestamp']];
-
-    // === 2. CREATE LOOKUP MAPS (map to 0-based array index) ===
-    const reporteMap = new Map(reporteData.map((row, i) => [norm(row[0]), { rowIndex: i }]));
-    const skuUnitMap = new Map(skuData.map(row => [norm(row[1]), row[7]]));
-    const estadosMap = new Map(estadosData.map((row, i) => [norm(row[0]), { rowIndex: i }]));
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const userEmail = Session.getActiveUser().getEmail() || 'Sistema';
-
-    // === 3. PREPARE BATCH-ADD ARRAYS ===
-    const discrepanciasNuevas = [];
-    const historicoNuevas = [];
-    const updatedProducts = [];
-    const errors = [];
-
-    // Map historical data for deletion logic
-    const histMap = new Map();
-    for (let i = 1; i < histData.length; i++) { // Skip header
-        const base = histData[i][1];
-        if (base) {
-          const baseNorm = norm(base);
-          if (!histMap.has(baseNorm)) histMap.set(baseNorm, []);
-          histMap.get(baseNorm).push({ rowIndex: i, timestamp: new Date(histData[i][0]) }); // Store 0-based index
-        }
-    }
-    histMap.forEach(entries => entries.sort((a, b) => a.timestamp - b.timestamp));
-    const rowsToDelete = new Set();
-
-
-    // === 4. PROCESS UPDATES IN-MEMORY ===
-    updates.forEach(update => {
-      let { productBase, quantity, state } = update;
-      const productBaseNorm = norm(productBase);
-
-      try {
-        if (quantity !== null && quantity < 0) quantity = 0;
-
-        // --- a. Estado ---
-        if (state) {
-            const estadoInfo = estadosMap.get(productBaseNorm);
-            const timestamp = new Date();
-            if (estadoInfo) { // Update existing estado in the array
-                const rowIndex = estadoInfo.rowIndex;
-                estadosData[rowIndex][1] = state; // Estado
-                estadosData[rowIndex][3] = userEmail; // Usuario
-                estadosData[rowIndex][4] = timestamp; // Timestamp
-            } else { // Add new estado to the array
-                const newRow = [productBase, state, 'Actualizado desde dashboard', userEmail, timestamp];
-                estadosData.push(newRow);
-                estadosMap.set(productBaseNorm, { rowIndex: estadosData.length - 1 }); // Update map for future updates in same batch
-            }
-        }
-
-        // --- b. Reporte Hoy & Discrepancia ---
-        const reporteInfo = reporteMap.get(productBaseNorm);
-        if (!reporteInfo) throw new Error(`Producto no encontrado en 'Reporte Hoy'.`);
-
-        const rowIndexReporte = reporteInfo.rowIndex;
-        reporteData[rowIndexReporte][5] = quantity; // Col F (index 5) is Stock Real
-
-        if (hojaDiscrepancias) {
-            const inventarioEstimado = parseFloat(reporteData[rowIndexReporte][4]);
-            discrepanciasNuevas.push([new Date(), productBase, inventarioEstimado, quantity, quantity - inventarioEstimado]);
-        }
-
-        // --- c. Histórico ---
-        const productEntries = histMap.get(productBaseNorm) || [];
-        const sameDayEntry = productEntries.find(entry => {
-            const entryDate = new Date(entry.timestamp);
-            entryDate.setHours(0, 0, 0, 0);
-            return entryDate.getTime() === today.getTime();
-        });
-
-        if (sameDayEntry) {
-            histData[sameDayEntry.rowIndex][2] = quantity; // Col C (index 2) is Stock Real
-        } else {
-            if (productEntries.length >= 5) {
-                // Mark the actual row index (1-based) for deletion
-                rowsToDelete.add(productEntries[0].rowIndex + 1);
-            }
-            const unit = skuUnitMap.get(productBaseNorm) || '';
-            historicoNuevas.push([new Date(), productBase, quantity, unit]);
-        }
-
-        // --- d. Frontend response ---
-        updatedProducts.push({ productBase, quantity, state });
-
-      } catch (e) {
-        errors.push(`Error con ${productBase}: ${e.message}`);
+    // 2. Crear un mapa para buscar la fila de cada producto rápidamente.
+    const productRowMap = new Map();
+    reporteData.forEach((row, index) => {
+      const productName = row[0]; // Columna A
+      if (productName) {
+        productRowMap.set(norm(productName), index); // Guardar índice 0-based
       }
     });
 
-    if (errors.length > 0) {
-      throw new Error(errors.join('; '));
-    }
+    // 3. Procesar las actualizaciones en la matriz en memoria.
+    const updatedProductsForFe = []; // Para la respuesta al frontend
+    updates.forEach(update => {
+      const { productBase, quantity } = update;
+      const productNorm = norm(productBase);
 
-    // === 5. EXECUTE BATCH WRITES ===
+      if (productRowMap.has(productNorm)) {
+        const rowIndex = productRowMap.get(productNorm);
+        // Columna F (Stock Real) es el índice 5 en el array 0-based.
+        reporteData[rowIndex][5] = (quantity === null || quantity === undefined) ? '' : quantity;
 
-    // Write back entire modified sheets
-    reporteRange.setValues(reporteData);
-    histRange.setValues(histData);
-
-    // For 'Estados', clear and rewrite to handle size changes
-    if (hojaEstados.getLastRow() > 0) {
-      hojaEstados.getRange(1, 1, hojaEstados.getLastRow(), hojaEstados.getLastColumn()).clearContent();
-    }
-    if (estadosData.length > 0) {
-      hojaEstados.getRange(1, 1, estadosData.length, estadosData[0].length).setValues(estadosData);
-      hojaEstados.getRange(1, 1, 1, estadosData[0].length).setFontWeight('bold');
-    }
-
-    // Append new rows
-    if (discrepanciasNuevas.length > 0) {
-      hojaDiscrepancias.getRange(hojaDiscrepancias.getLastRow() + 1, 1, discrepanciasNuevas.length, discrepanciasNuevas[0].length).setValues(discrepanciasNuevas);
-    }
-    if (historicoNuevas.length > 0) {
-        hojaHistorico.getRange(hojaHistorico.getLastRow() + 1, 1, historicoNuevas.length, historicoNuevas[0].length).setValues(historicoNuevas);
-    }
-
-    // Delete rows in reverse order to avoid index shifts
-    Array.from(rowsToDelete).sort((a, b) => b - a).forEach(rowIndex => {
-      hojaHistorico.deleteRow(rowIndex);
+        // El frontend todavía espera un objeto de respuesta, así que lo preparamos.
+        updatedProductsForFe.push({
+          productBase: productBase,
+          quantity: quantity,
+          // El estado se actualizará visualmente por el `onEdit` y el siguiente `getDashboardData`,
+          // pero podemos devolver 'aprobado' para una respuesta más rápida de la UI.
+          state: (quantity !== null && quantity !== '') ? 'aprobado' : 'pendiente'
+        });
+      }
     });
 
-    return { success: true, message: `${updatedProducts.length} productos actualizados.`, updatedProducts: updatedProducts };
+    // 4. Escribir toda la matriz de datos actualizada de vuelta a la hoja.
+    reporteRange.setValues(reporteData);
+
+    return { success: true, message: `${updates.length} productos actualizados en 'Reporte Hoy'.`, updatedProducts: updatedProductsForFe };
+
   } catch (e) {
-    Logger.log(e.stack);
+    Logger.log(`Error en saveStockUpdates: ${e.stack}`);
     return { success: false, error: e.message };
   }
 }
