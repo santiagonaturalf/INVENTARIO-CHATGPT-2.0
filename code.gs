@@ -86,6 +86,14 @@ function setup() {
       hojaHistorico.getRange(1, 1, 1, encabezadosHistorico.length).setValues([encabezadosHistorico]).setFontWeight("bold");
   }
 
+  // --- 4.1. Hoja de Inventario Actual ---
+  const hojaInventarioActual = obtenerOCrearHoja(ss, "Inventario Actual");
+  const encabezadosInventarioActual = ["Timestamp", "Producto Base", "Stock Real", "Unidad Venta"];
+  // Solo escribir encabezados si la fila 1 está vacía
+  if (hojaInventarioActual.getRange("A1").getValue() === "") {
+      hojaInventarioActual.getRange(1, 1, 1, encabezadosInventarioActual.length).setValues([encabezadosInventarioActual]).setFontWeight("bold");
+  }
+
   // --- 5. Hoja de Reporte Hoy ---
   const hojaReporte = obtenerOCrearHoja(ss, HOJA_REPORTE_HOY);
   const encabezadosReporte = ["Producto Base", "Inventario Ayer", "Compras del Día", "Ventas del Día", "Inventario Hoy", "Stock Real", "Discrepancias"];
@@ -1175,6 +1183,7 @@ function saveStockUpdates(updates) {
     const hojaReporte = ss.getSheetByName(HOJA_REPORTE_HOY);
     const hojaDiscrepancias = ss.getSheetByName("Discrepancias");
     const hojaHistorico = ss.getSheetByName(HOJA_HISTORICO);
+    const hojaInventarioActual = ss.getSheetByName("Inventario Actual");
     const hojaSku = ss.getSheetByName(HOJA_SKU);
 
     // Get all data once for efficiency
@@ -1188,6 +1197,18 @@ function saveStockUpdates(updates) {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+
+    // --- Limpieza de Inventario Actual ---
+    const inventarioActualData = hojaInventarioActual.getDataRange().getValues();
+    const rowsToDeleteActual = [];
+    for (let i = inventarioActualData.length - 1; i > 0; i--) {
+        const rowDate = new Date(inventarioActualData[i][0]);
+        rowDate.setHours(0, 0, 0, 0);
+        if (rowDate.getTime() < today.getTime()) {
+            rowsToDeleteActual.push(i + 1);
+        }
+    }
+    rowsToDeleteActual.forEach(rowIndex => hojaInventarioActual.deleteRow(rowIndex));
 
     let successCount = 0;
     const errors = [];
@@ -1244,6 +1265,22 @@ function saveStockUpdates(updates) {
           }
           const unit = skuUnitMap.get(productBase) || '';
           hojaHistorico.appendRow([new Date(), productBase, quantity, unit]);
+        }
+
+        // 4. Update Inventario Actual
+        const inventarioActualDataUpdated = hojaInventarioActual.getDataRange().getValues();
+        let foundInActual = false;
+        for (let i = 1; i < inventarioActualDataUpdated.length; i++) {
+            if (inventarioActualDataUpdated[i][1] === productBase) {
+                hojaInventarioActual.getRange(i + 1, 1).setValue(new Date());
+                hojaInventarioActual.getRange(i + 1, 3).setValue(quantity);
+                foundInActual = true;
+                break;
+            }
+        }
+        if (!foundInActual) {
+            const unit = skuUnitMap.get(productBase) || '';
+            hojaInventarioActual.appendRow([new Date(), productBase, quantity, unit]);
         }
 
         // Add to the list of products to return to the frontend
