@@ -84,8 +84,8 @@ function onEdit(e) {
 }
 
 /**
- * Archiva el estado actual de "Reporte Hoy" en "Inventario Histórico".
- * Esta función está pensada para ser ejecutada manualmente al final del día.
+ * Archiva el estado de "Reporte Hoy" en "Inventario Histórico", manteniendo un historial de 7 días
+ * y asegurando que cada producto tenga una única entrada por día.
  */
 function cerrarDia() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -97,88 +97,88 @@ function cerrarDia() {
     const skuSheet = ss.getSheetByName(HOJA_SKU);
 
     if (!reporteSheet || !histSheet || !skuSheet) {
-      throw new Error("No se encontraron una o más hojas requeridas: Reporte Hoy, Inventario Histórico, SKU.");
+      throw new Error("No se encontraron hojas requeridas: Reporte Hoy, Inventario Histórico, SKU.");
     }
-
     if (reporteSheet.getLastRow() < 2) {
       ui.alert("La hoja 'Reporte Hoy' está vacía. No hay nada que archivar.");
       return;
     }
 
-    // 1. Read data from sheets
+    // 1. Leer datos de "Reporte Hoy" y "SKU"
     const reporteData = reporteSheet.getRange(2, 1, reporteSheet.getLastRow() - 1, 6).getValues(); // A:F
-    const skuData = skuSheet.getRange(2, 1, skuSheet.getLastRow() - 1, 8).getValues(); // A:H
+    const skuData = skuSheet.getRange(2, 1, skuSheet.getLastRow() - 1, 8).getValues();     // A:H
+    const skuUnitMap = new Map(skuData.map(row => [norm(row[1]), row[7]])); // Map: producto base -> unidad
 
-    // 2. Create a map for SKU units for quick lookup
-    const skuUnitMap = new Map(skuData.map(row => [norm(row[1]), row[7]])); // Map: normalized product base -> unit
-
-    // 3. Prepare new historical records
-    const newHistoricalRecords = [];
-    const timestamp = new Date();
-
+    // 2. Preparar los nuevos registros del día
+    const newRecords = [];
+    const todayTimestamp = new Date();
     reporteData.forEach(row => {
-      const productBase = row[0];
-      const stockReal = row[5]; // Column F
-
-      // Only process rows where a "Stock Real" has been entered
+      const [productBase, , , , , stockReal] = row;
       if (productBase && (stockReal !== null && stockReal !== "" && !isNaN(parseFloat(stockReal)))) {
         const unit = skuUnitMap.get(norm(productBase)) || '';
-        newHistoricalRecords.push([
-          timestamp,
-          productBase,
-          parseFloat(stockReal),
-          unit
-        ]);
+        newRecords.push([todayTimestamp, productBase, parseFloat(stockReal), unit]);
       }
     });
 
-    if (newHistoricalRecords.length === 0) {
-      ui.alert("No hay productos con 'Stock Real' para archivar. No se realizó ninguna acción.");
+    if (newRecords.length === 0) {
+      ui.alert("No hay productos con 'Stock Real' para archivar.");
       return;
     }
 
-    // 4. Append new records in a single batch
-    histSheet.getRange(histSheet.getLastRow() + 1, 1, newHistoricalRecords.length, 4).setValues(newHistoricalRecords);
+    // 3. Leer historial existente y combinar con los nuevos registros
+    const histData = histSheet.getLastRow() > 1 ? histSheet.getRange(2, 1, histSheet.getLastRow() - 1, 4).getValues() : [];
 
-    // 5. Clean up old historical data (keep last 5 per product)
-    const allHistData = histSheet.getDataRange().getValues();
-    allHistData.shift(); // Remove header for processing
+    // Usar un Map para garantizar unicidad por producto y día
+    const combinedDataMap = new Map();
 
-    const histMap = new Map();
-    // Re-map all historical data including the newly added ones
-    allHistData.forEach((row, index) => {
-      const base = row[1];
-      if (base) {
-        const baseNorm = norm(base);
-        if (!histMap.has(baseNorm)) histMap.set(baseNorm, []);
-        // Store original row index (add 2 because we shifted header and it's 1-based)
-        histMap.get(baseNorm).push({ rowIndex: index + 2, timestamp: new Date(row[0]) });
-      }
+    // Helper para normalizar una fecha (ignorar horas/minutos)
+    const getDayKey = (dt) => {
+      if (!(dt instanceof Date)) dt = new Date(dt);
+      return dt.getFullYear() + '-' + (dt.getMonth() + 1) + '-' + dt.getDate();
+    };
+
+    // Procesar datos históricos
+    histData.forEach(row => {
+      const [timestamp, product, stock, unit] = row;
+      const key = `${norm(product)}-${getDayKey(timestamp)}`;
+      combinedDataMap.set(key, [new Date(timestamp), product, stock, unit]);
     });
 
-    const rowsToDelete = new Set();
-    histMap.forEach(entries => {
-      if (entries.length > 5) {
-        // Sort by date ascending to find the oldest
-        entries.sort((a, b) => a.timestamp - b.timestamp);
-        const toDeleteCount = entries.length - 5;
-        for (let i = 0; i < toDeleteCount; i++) {
-          rowsToDelete.add(entries[i].rowIndex);
-        }
-      }
+    // Procesar (y sobrescribir) con los nuevos datos
+    newRecords.forEach(row => {
+      const [timestamp, product, stock, unit] = row;
+      const key = `${norm(product)}-${getDayKey(timestamp)}`;
+      combinedDataMap.set(key, [timestamp, product, stock, unit]);
     });
 
-    // Delete rows in reverse order to avoid index shifts
-    if (rowsToDelete.size > 0) {
-      Array.from(rowsToDelete).sort((a, b) => b - a).forEach(rowIndex => {
-        histSheet.deleteRow(rowIndex);
-      });
+    // 4. Filtrar para mantener solo los últimos 7 días de registros
+    const allRecords = Array.from(combinedDataMap.values());
+    const uniqueDates = [...new Set(allRecords.map(r => getDayKey(r[0])))];
+    uniqueDates.sort((a, b) => new Date(b) - new Date(a)); // Ordenar fechas de más nueva a más vieja
+
+    const datesToKeep = new Set(uniqueDates.slice(0, 7));
+
+    const finalRecords = allRecords.filter(r => datesToKeep.has(getDayKey(r[0])));
+
+    // 5. Ordenar por fecha (más reciente primero) y luego por producto
+    finalRecords.sort((a, b) => {
+      const dateComparison = b[0] - a[0];
+      if (dateComparison !== 0) return dateComparison;
+      return a[1].localeCompare(b[1]); // Compara por nombre de producto
+    });
+
+    // 6. Limpiar la hoja y escribir los datos finales
+    if (histSheet.getLastRow() > 1) {
+      histSheet.getRange(2, 1, histSheet.getLastRow() - 1, 4).clearContent();
+    }
+    if (finalRecords.length > 0) {
+      histSheet.getRange(2, 1, finalRecords.length, 4).setValues(finalRecords);
     }
 
-    ui.alert(`¡Día cerrado con éxito! Se han archivado ${newHistoricalRecords.length} registros en el Inventario Histórico.`);
+    ui.alert(`¡Día cerrado con éxito! Se han archivado/actualizado ${newRecords.length} registros. El historial ahora contiene datos de ${datesToKeep.size} días.`);
 
   } catch (e) {
-    Logger.log(`Error en cerrarDia: ${e.message}`);
+    Logger.log(`Error en cerrarDia: ${e.message}\n${e.stack}`);
     ui.alert(`Ocurrió un error al cerrar el día: ${e.message}`);
   }
 }
