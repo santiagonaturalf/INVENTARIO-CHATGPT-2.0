@@ -174,6 +174,12 @@
         .negative-stock { background-color: #FFDADA; font-weight: bold; }
         .error-row { background-color: #ffe5e5 !important; }
         .error-row:hover { background-color: #ffdddd !important; }
+        /* New styles for row coloring */
+        .row-green { background-color: #E6FFED; }
+        .row-green:hover { background-color: #D6F5DD; }
+        .row-red { background-color: #FFF0F0; }
+        .row-red:hover { background-color: #FFDFDF; }
+
         .badge { padding:2px 6px; border-radius:10px; font-size:12px; }
         .badge-ok { background:#e6ffed; color:#1a7f37; border:1px solid #b7ebc6; }
         .badge-warn { background:#fff7e6; color:#ad6800; border:1px solid #ffe58f; }
@@ -206,10 +212,8 @@
 
             <div style="display:flex; gap:16px; align-items:center; margin:10px 0; flex-wrap: wrap;">
               <label><input type="checkbox" id="filterMovHoy"> Mostrar sólo con movimiento hoy</label>
-              <label><input type="checkbox" id="hideApproved" checked> Ocultar verificados/aprobados</label>
               <label><input type="checkbox" id="viewCategories"> Ordenar por Categorías</label>
               <label><input type="checkbox" id="filterNegativeStock"> Mostrar sólo con stock negativo</label>
-              <small style="opacity:.7;">(Los verificados/aprobados aparecen si los buscas por nombre)</small>
             </div>
 
             <!-- Tabla de inventario -->
@@ -217,14 +221,12 @@
                 <table id="inventory-table">
                     <thead>
                         <tr>
-                            <th><input type="checkbox" id="select-all-checkbox"></th>
                             <th>Producto Base</th>
                             <th>Inv. Ayer</th>
                             <th>Compras</th>
                             <th>Ventas</th>
                             <th>Inv. Hoy</th>
                             <th>Unidad</th>
-                            <th>Estado</th>
                             <th>Stock Real</th>
                         </tr>
                     </thead>
@@ -237,7 +239,6 @@
             <!-- Botones -->
             <div id="footer-buttons" class="footer-buttons">
                 <div style="margin-right: auto; display: flex; gap: 15px;">
-                    <!-- The mass approval buttons have been removed as per the new workflow -->
                 </div>
                 <button class="secondary-button">🔄 Actualizar Datos</button>
             </div>
@@ -245,32 +246,27 @@
     </div>
 
     <script>
-        let dashboardData = null; // { inventory, estados, ... }
-        let estadosMap = {}; // { baseProduct: 'pendiente'|'verificando'|'aprobado' }
+        let dashboardData = null; // Contiene { inventory: [...] }
+        let productToFocus = null; // Para manejar el foco post-recarga
 
         window.addEventListener('load', () => {
-            // Restore previous UI state before doing anything else
             loadUiState();
 
-            // Add event listeners that now also save state on change
             document.getElementById('filterMovHoy')?.addEventListener('change', () => { saveUiState(); renderInventoryTable(); });
-            document.getElementById('hideApproved')?.addEventListener('change', () => { saveUiState(); renderInventoryTable(); });
             document.getElementById('viewCategories')?.addEventListener('change', () => { saveUiState(); renderInventoryTable(); });
             document.getElementById('filterNegativeStock')?.addEventListener('change', () => { saveUiState(); renderInventoryTable(); });
             document.getElementById('searchInput')?.addEventListener('input', () => { saveUiState(); renderInventoryTable(); });
 
-            document.querySelector('.secondary-button').addEventListener('click', cargarDatosDashboard);
-            // setupMassApproval(); // This function is no longer needed
+            document.querySelector('.secondary-button').addEventListener('click', () => {
+                productToFocus = null; // Clear focus when manually updating
+                cargarDatosDashboard();
+            });
             cargarDatosDashboard();
         });
 
-        /**
-         * Saves the current state of UI filter controls to localStorage.
-         */
         function saveUiState() {
             const uiState = {
                 filterMovHoy: document.getElementById('filterMovHoy')?.checked,
-                hideApproved: document.getElementById('hideApproved')?.checked,
                 viewCategories: document.getElementById('viewCategories')?.checked,
                 filterNegativeStock: document.getElementById('filterNegativeStock')?.checked,
                 searchValue: document.getElementById('searchInput')?.value
@@ -278,24 +274,18 @@
             localStorage.setItem('inventoryDashboardState', JSON.stringify(uiState));
         }
 
-        /**
-         * Loads and applies UI filter state from localStorage on page load.
-         */
         function loadUiState() {
             try {
                 const savedState = localStorage.getItem('inventoryDashboardState');
                 if (savedState) {
                     const uiState = JSON.parse(savedState);
-
                     if (uiState.filterMovHoy !== undefined) document.getElementById('filterMovHoy').checked = uiState.filterMovHoy;
-                    if (uiState.hideApproved !== undefined) document.getElementById('hideApproved').checked = uiState.hideApproved;
                     if (uiState.viewCategories !== undefined) document.getElementById('viewCategories').checked = uiState.viewCategories;
                     if (uiState.filterNegativeStock !== undefined) document.getElementById('filterNegativeStock').checked = uiState.filterNegativeStock;
                     if (uiState.searchValue !== undefined) document.getElementById('searchInput').value = uiState.searchValue;
                 }
             } catch (e) {
                 console.error("Error loading UI state from localStorage:", e);
-                // No need to alert the user, just log it.
             }
         }
 
@@ -304,18 +294,22 @@
             google.script.run
                 .withSuccessHandler(function(payload) {
                     setLoadingState(false);
-                    try {
-                        if (!payload || !payload.inventory) {
-                            mostrarMensaje(payload?.msg || 'No se pudo cargar la data.');
-                            dashboardData = { inventory: [], estados: {} };
-                            estadosMap = {};
-                        } else {
-                            dashboardData = payload;
-                            estadosMap = payload.estados || {};
+                    if (!payload || !payload.inventory) {
+                        mostrarMensaje(payload?.error || 'No se pudo cargar la data. Verifique que las hojas requeridas existen.');
+                        dashboardData = { inventory: [] };
+                    } else {
+                        dashboardData = payload;
+                    }
+                    renderInventoryTable();
+
+                    // After rendering, check if we need to focus a specific input
+                    if (productToFocus) {
+                        const nextInput = document.querySelector(`tr[data-product-base="${productToFocus}"] .real-stock-input`);
+                        if (nextInput) {
+                            nextInput.focus();
+                            nextInput.select();
                         }
-                        renderInventoryTable();
-                    } catch (e) {
-                        mostrarMensaje('Error renderizando: ' + e.message);
+                        productToFocus = null; // Reset after use
                     }
                 })
                 .withFailureHandler(handleError)
@@ -323,52 +317,29 @@
         }
 
         function getSearchText() {
-            const el = document.getElementById('searchInput');
-            return (el && el.value ? el.value.trim().toLowerCase() : '');
+            return (document.getElementById('searchInput')?.value || '').trim().toLowerCase();
         }
 
         function getDatosFiltrados() {
             if (!dashboardData?.inventory) return [];
             const onlyMov = document.getElementById('filterMovHoy')?.checked;
-            const hideApproved = document.getElementById('hideApproved')?.checked;
             const onlyNegative = document.getElementById('filterNegativeStock')?.checked;
             const q = getSearchText();
 
             return dashboardData.inventory.filter(item => {
-                // Filter by negative stock
-                if (onlyNegative && item.expectedStock >= 0) {
-                    return false;
-                }
-
-                const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
+                if (onlyNegative && item.expectedStock >= 0) return false;
                 if (onlyMov && !(Number(item.sales) > 0 || Number(item.purchases) > 0)) return false;
-                const isApproved = (estado === 'verificando' || estado === 'aprobado');
+
                 const matchName = item.baseProduct.toLowerCase().includes(q);
                 const matchCategory = (item.category || '').toLowerCase().includes(q);
-
-                if (hideApproved && isApproved) {
-                    if (!q) return false;
-                    if (!(matchName || matchCategory)) return false;
-                }
                 if (q && !(matchName || matchCategory)) return false;
+
                 return true;
             });
         }
 
-        function estadoBadgeClass(estado) {
-            switch ((estado || '').toLowerCase()) {
-                case 'verificando':
-                    return 'badge badge-warn';
-                case 'aprobado':
-                    return 'badge badge-ok';
-                default:
-                    return 'badge badge-neutral';
-            }
-        }
-
         function renderInventoryTable() {
-            const viewByCat = document.getElementById('viewCategories')?.checked;
-            if (viewByCat) {
+            if (document.getElementById('viewCategories')?.checked) {
                 renderCategoryView();
             } else {
                 renderProductView();
@@ -376,33 +347,22 @@
         }
 
         function renderCategoryView() {
-            // 1. Restore footer buttons and original headers
-            document.getElementById('footer-buttons').style.display = 'flex';
             const thead = document.querySelector('#inventory-table thead');
             thead.innerHTML = `
                 <tr>
-                    <th>Producto Base</th>
-                    <th>Inv. Ayer</th>
-                    <th>Compras</th>
-                    <th>Ventas</th>
-                    <th>Inv. Hoy</th>
-                    <th>Unidad</th>
-                    <th>Estado</th>
-                    <th>Stock Real</th>
-                </tr>
-            `;
+                    <th>Producto Base</th><th>Inv. Ayer</th><th>Compras</th><th>Ventas</th>
+                    <th>Inv. Hoy</th><th>Unidad</th><th>Stock Real</th>
+                </tr>`;
 
             const tbody = document.getElementById('tablaInventarioBody');
             tbody.innerHTML = '';
             const rows = getDatosFiltrados();
 
             if (rows.length === 0) {
-                const columnCount = 8;
-                tbody.innerHTML = `<tr><td colspan="${columnCount}" style="text-align:center;">No hay productos que coincidan con los filtros.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;">No hay productos que coincidan.</td></tr>`;
                 return;
             }
 
-            // 2. Sort data by category, then by product name
             rows.sort((a, b) => {
                 const catA = a.category || 'Sin Categoría';
                 const catB = b.category || 'Sin Categoría';
@@ -414,255 +374,166 @@
             let currentCategory = null;
             rows.forEach(item => {
                 const itemCategory = item.category || 'Sin Categoría';
-
-                // 3. If category is new, add a header row
                 if (itemCategory !== currentCategory) {
                     currentCategory = itemCategory;
-                    const categoryHeaderRow = document.createElement('tr');
-                    categoryHeaderRow.classList.add('category-header-row');
-                    categoryHeaderRow.innerHTML = `<td colspan="8">${currentCategory}</td>`;
-                    tbody.appendChild(categoryHeaderRow);
+                    const catRow = tbody.insertRow();
+                    catRow.className = 'category-header-row';
+                    catRow.innerHTML = `<td colspan="7">${currentCategory}</td>`;
                 }
-
-                // 4. Render product row (logic from renderProductView)
-                const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
-                const tr = document.createElement('tr');
-                if (item.error) {
-                    tr.classList.add('error-row');
-                    tr.title = item.errorMsg || 'Inconsistencia detectada';
-                }
-                if (item.expectedStock <= 0) {
-                    tr.classList.add('low-stock');
-                }
-                tr.dataset.productBase = item.baseProduct;
-                tr.innerHTML = `
-                    <td>${item.baseProduct}</td>
-                    <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
-                    <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
-                    <td class="num">${Number(item.sales||0).toFixed(2)}</td>
-                    <td class="num"><strong>${Number(item.expectedStock||0).toFixed(2)}</strong></td>
-                    <td>${item.unit || ''}</td>
-                    <td>
-                      <span class="${estadoBadgeClass(estado)}">${estado}</span>
-                    </td>
-                    <td>
-                        <div class="stock-input-wrapper">
-                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/>
-                            <button class="zero-out-button" data-base="${item.baseProduct}" title="Poner en Cero y Aprobar">0</button>
-                        </div>
-                    </td>
-                `;
+                const tr = createProductRow(item);
                 tbody.appendChild(tr);
             });
-
-            // 5. Add event listeners
-            addEventListeners();
+            addEventListenersToRows();
         }
 
         function renderProductView() {
-             // Restore footer buttons and original headers
-            document.getElementById('footer-buttons').style.display = 'flex';
             const thead = document.querySelector('#inventory-table thead');
             thead.innerHTML = `
                 <tr>
-                    <th>Producto Base</th>
-                    <th>Inv. Ayer</th>
-                    <th>Compras</th>
-                    <th>Ventas</th>
-                    <th>Inv. Hoy</th>
-                    <th>Unidad</th>
-                    <th>Estado</th>
-                    <th>Stock Real</th>
-                </tr>
-            `;
+                    <th>Producto Base</th><th>Inv. Ayer</th><th>Compras</th><th>Ventas</th>
+                    <th>Inv. Hoy</th><th>Unidad</th><th>Stock Real</th>
+                </tr>`;
 
             const tbody = document.getElementById('tablaInventarioBody');
             tbody.innerHTML = '';
             const rows = getDatosFiltrados();
+
             if (rows.length === 0) {
-                const columnCount = 8;
-                tbody.innerHTML = `<tr><td colspan="${columnCount}" style="text-align:center;">No hay productos que coincidan con los filtros.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;">No hay productos que coincidan.</td></tr>`;
                 return;
             }
             rows.forEach(item => {
-                const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
-                const tr = document.createElement('tr');
-                if (item.error) {
-                    tr.classList.add('error-row');
-                    tr.title = item.errorMsg || 'Inconsistencia detectada';
-                }
-                if (item.expectedStock <= 0) {
-                    tr.classList.add('low-stock');
-                }
-                tr.dataset.productBase = item.baseProduct;
-                tr.innerHTML = `
-                    <td>${item.baseProduct}</td>
-                    <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
-                    <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
-                    <td class="num">${Number(item.sales||0).toFixed(2)}</td>
-                    <td class="num"><strong>${Number(item.expectedStock||0).toFixed(2)}</strong></td>
-                    <td>${item.unit || ''}</td>
-                    <td>
-                      <span class="${estadoBadgeClass(estado)}">${estado}</span>
-                    </td>
-                    <td>
-                        <div class="stock-input-wrapper">
-                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/>
-                            <button class="zero-out-button" data-base="${item.baseProduct}" title="Poner en Cero y Aprobar">0</button>
-                        </div>
-                    </td>
-                `;
+                const tr = createProductRow(item);
                 tbody.appendChild(tr);
             });
-
-            addEventListeners();
+            addEventListenersToRows();
         }
 
-        function handleItemSave(updates, callback) {
+        function createProductRow(item) {
+            const tr = document.createElement('tr');
+            tr.className = item.rowColor === 'green' ? 'row-green' : 'row-red';
+            if (item.error) {
+                tr.classList.add('error-row');
+                tr.title = item.errorMsg || 'Inconsistencia detectada';
+            }
+            tr.dataset.productBase = item.baseProduct;
+            // Store the expected stock in a data attribute to be easily retrieved by the event listener
+            tr.dataset.invHoy = item.expectedStock;
+            tr.innerHTML = `
+                <td>${item.baseProduct}</td>
+                <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
+                <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
+                <td class="num">${Number(item.sales||0).toFixed(2)}</td>
+                <td class="num"><strong>${Number(item.expectedStock||0).toFixed(2)}</strong></td>
+                <td>${item.unit || ''}</td>
+                <td>
+                    <div class="stock-input-wrapper">
+                        <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.displayStock).toFixed(2)}"/>
+                        <button class="zero-out-button" data-base="${item.baseProduct}" title="Poner en Cero">0</button>
+                        <input type="checkbox" class="accept-inv-hoy-checkbox" title="Aceptar Inv. Hoy como Stock Real" style="cursor: pointer; width: 20px; height: 20px;"/>
+                    </div>
+                </td>`;
+            return tr;
+        }
+
+        function handleItemSave(updates, onComplete) {
             setLoadingState(true);
             google.script.run
                 .withSuccessHandler(response => {
-                    setLoadingState(false);
-                    if (response.success && response.updatedProducts) {
-                        // Update local state from the response for data consistency,
-                        // even though we are not re-rendering immediately.
-                        response.updatedProducts.forEach(updatedProd => {
-                            if (updatedProd.state) {
-                                estadosMap[updatedProd.productBase] = updatedProd.state;
-                            }
-                            const itemIndex = dashboardData.inventory.findIndex(item => item.baseProduct === updatedProd.productBase);
-                            if (itemIndex > -1) {
-                                const item = dashboardData.inventory[itemIndex];
-                                if (updatedProd.quantity !== null) {
-                                  item.lastInventory = updatedProd.quantity;
-                                }
-                                if (updatedProd.state === 'aprobado') {
-                                    item.sales = 0;
-                                    item.purchases = 0;
-                                }
-                                item.expectedStock = item.lastInventory + item.purchases - item.sales;
-                            }
-                        });
-                    } else if (!response.success) {
-                        alert("Error al guardar: " + (response.error || "Ocurrió un error desconocido."));
+                    if (!response.success) {
+                        alert("Error al guardar: " + (response.error || "Ocurrió un error."));
                     }
-                    // DO NOT re-render the table to provide a seamless experience.
-                    // The UI will only update on the next manual load.
-                    if (typeof callback === 'function') {
-                        callback(); // Still execute callback for things like Tab navigation.
-                    }
+                    // Siempre recargar para reflejar el cambio de color y valor.
+                    cargarDatosDashboard();
                 })
                 .withFailureHandler(err => {
-                    setLoadingState(false);
-                    alert("Error de comunicación con el servidor: " + err.message);
-                    // DO NOT re-render the table.
-                    if (typeof callback === 'function') {
-                        callback();
-                    }
+                    alert("Error de comunicación: " + err.message);
+                    cargarDatosDashboard(); // Recargar incluso en caso de fallo para estar sincronizado
                 })
                 .saveStockUpdates(updates);
         }
 
-        function addEventListeners() {
-            const tbody = document.getElementById('tablaInventarioBody');
+        function addEventListenersToRows() {
+            const tableBody = document.getElementById('tablaInventarioBody');
+            const allVisibleRows = Array.from(tableBody.querySelectorAll('tr[data-product-base]'));
 
-            // --- Stock Real Inputs (works for both views) ---
-            tbody.querySelectorAll('.real-stock-input').forEach(input => {
-                const base = input.dataset.base;
-                const originalValue = input.value;
+            allVisibleRows.forEach((row, currentIndex) => {
+                const input = row.querySelector('.real-stock-input');
+                const zeroButton = row.querySelector('.zero-out-button');
+                const acceptCheckbox = row.querySelector('.accept-inv-hoy-checkbox');
+                const base = row.dataset.productBase;
 
-                // Add a listener to track if the input has been changed from its original value
-                input.addEventListener('input', function() {
-                    if (this.value !== originalValue) {
-                        this.dataset.isDirty = 'true';
-                    } else {
-                        delete this.dataset.isDirty;
-                    }
-                });
+                if (input) {
+                    // Track if the input value has changed
+                    const originalValue = input.value;
+                    input.addEventListener('input', function() {
+                        this.dataset.isDirty = this.value !== originalValue;
+                    });
 
-                // Save on change (if value is different)
-                input.addEventListener('change', function() {
-                    if (this.dataset.isDirty === 'true') {
-                        const quantity = parseFloat(this.value);
-                        if(isNaN(quantity)) { return; }
-                        if (quantity < 0) {
-                            alert('El Stock Real no puede ser negativo.');
-                            renderInventoryTable(); // Re-render to restore original value
-                            return;
-                        }
-                        // The 'state' is no longer sent from the frontend.
-                        handleItemSave([{ productBase: base, quantity: quantity }]);
-                    }
-                });
-
-                // Save on Enter or Tab, and navigate to the next input
-                input.addEventListener('keydown', function(event) {
-                    const isEnter = event.key === 'Enter';
-                    const isTab = event.key === 'Tab' && !event.shiftKey;
-
-                    if (isEnter || isTab) {
-                        event.preventDefault();
-
-                        // --- Find next input for navigation ---
-                        let nextInput = null;
-                        const allVisibleRows = Array.from(tbody.querySelectorAll('tr[data-product-base]'));
-                        const currentRow = this.closest('tr');
-                        const currentIndex = allVisibleRows.findIndex(row => row === currentRow);
-
-                        if (currentIndex > -1 && currentIndex < allVisibleRows.length - 1) {
-                            const nextRow = allVisibleRows[currentIndex + 1];
-                            if(nextRow) {
-                                nextInput = nextRow.querySelector('.real-stock-input');
-                            }
-                        }
-
-                        // --- Define the callback to run after save ---
-                        const postSaveCallback = () => {
-                            if (nextInput) {
-                                nextInput.focus();
-                                nextInput.select();
-                            }
-                        };
-
-                        // --- Validate and Save ---
-                        const quantity = parseFloat(this.value);
-                        if (isNaN(quantity)) {
-                            alert('Por favor, introduce un número válido en "Stock Real".');
-                            this.select(); // Re-select content on error
-                            return;
-                        }
-                        if (quantity < 0) {
-                            alert('El Stock Real no puede ser negativo.');
-                            this.select(); // Re-select content on error
-                            return;
-                        }
-
-                        // Only save if the value has been changed
+                    // Save on change (e.g., when clicking away) if dirty
+                    input.addEventListener('change', function() {
                         if (this.dataset.isDirty === 'true') {
-                             handleItemSave([{ productBase: base, quantity: quantity }], postSaveCallback);
-                        } else {
-                            // If Tab/Enter is pressed but value is unchanged, just navigate
-                            postSaveCallback();
+                            const quantity = parseFloat(this.value);
+                            if (!isNaN(quantity)) {
+                                productToFocus = null; // Don't refocus on simple change
+                                handleItemSave([{ productBase: base, quantity: quantity }]);
+                            }
                         }
-                    }
-                });
-            });
+                    });
 
-            // --- Zero Out Button (works for both views) ---
-            tbody.querySelectorAll('.zero-out-button').forEach(button => {
-                button.addEventListener('click', function() {
-                    const base = this.dataset.base;
-                    const input = this.closest('tr').querySelector('.real-stock-input');
-                    if (input) {
-                        input.value = "0.00";
-                    }
-                    // The 'state' is no longer sent from the frontend.
-                    handleItemSave([{ productBase: base, quantity: 0 }]);
-                });
+                    // Handle Enter/Tab for quick navigation
+                    input.addEventListener('keydown', function(event) {
+                        const isEnter = event.key === 'Enter';
+                        const isTab = event.key === 'Tab' && !event.shiftKey;
+
+                        if (isEnter || isTab) {
+                            event.preventDefault();
+
+                            // Find the next row and set it as the focus target
+                            if (currentIndex < allVisibleRows.length - 1) {
+                                const nextRow = allVisibleRows[currentIndex + 1];
+                                productToFocus = nextRow.dataset.productBase;
+                            } else {
+                                productToFocus = null; // No more rows to focus
+                            }
+
+                            // Save the current value if it has been changed
+                            if (this.dataset.isDirty === 'true') {
+                                const quantity = parseFloat(this.value);
+                                if (!isNaN(quantity)) {
+                                    handleItemSave([{ productBase: base, quantity: quantity }]);
+                                } else {
+                                    // If invalid, just reload without focusing
+                                    cargarDatosDashboard();
+                                }
+                            } else {
+                                // If not dirty, just trigger the reload to focus the next input
+                                cargarDatosDashboard();
+                            }
+                        }
+                    });
+                }
+
+                if (zeroButton) {
+                    zeroButton.addEventListener('click', function() {
+                        productToFocus = base; // Refocus the same item after setting to 0
+                        handleItemSave([{ productBase: base, quantity: 0 }]);
+                    });
+                }
+
+                if (acceptCheckbox) {
+                    acceptCheckbox.addEventListener('change', function() {
+                        if (this.checked) {
+                            productToFocus = base; // Refocus the same item after accepting
+                            const invHoy = parseFloat(row.dataset.invHoy);
+                            if (!isNaN(invHoy)) {
+                                handleItemSave([{ productBase: base, quantity: invHoy }]);
+                            }
+                        }
+                    });
+                }
             });
         }
-
-        // The setupMassApproval function has been removed as it is no longer needed.
 
         function handleError(err) {
             setLoadingState(false);
@@ -678,19 +549,11 @@
         }
 
         function setLoadingState(isLoading) {
-            const buttons = document.querySelectorAll('.footer-buttons button');
-            buttons.forEach(button => {
-                button.disabled = isLoading;
-                const updateButton = button.textContent.includes('Actualizar');
-                const saveButton = button.textContent.includes('Guardar');
-                if (isLoading) {
-                    if (updateButton) button.textContent = 'Actualizando...';
-                    if (saveButton) button.textContent = 'Guardando...';
-                } else {
-                    if (updateButton) button.textContent = '🔄 Actualizar Datos';
-                    if (saveButton) button.textContent = '💾 Guardar Inventario';
-                }
-            });
+            document.querySelectorAll('button, input').forEach(el => el.disabled = isLoading);
+            const updateButton = document.querySelector('.secondary-button');
+            if (updateButton) {
+                updateButton.textContent = isLoading ? 'Actualizando...' : '🔄 Actualizar Datos';
+            }
         }
     </script>
 </body>
