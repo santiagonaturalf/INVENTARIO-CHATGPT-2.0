@@ -158,40 +158,17 @@
 
         .hidden { display: none !important; }
 
-        /* --- Accordion Styles --- */
-        .category-row {
+        /* --- Custom Category Styles --- */
+        .category-header-row {
             font-weight: bold;
             background-color: #f0f5ff; /* A light blue to match the theme */
-            cursor: pointer;
             border-left: 4px solid var(--primary-color);
-            transition: background-color 0.2s;
         }
-        .category-row:hover {
-            background-color: #e6f0ff;
-        }
-        .category-row td {
+        .category-header-row td {
             padding-top: 14px !important;
             padding-bottom: 14px !important;
         }
-        .product-details-row {
-            background-color: #fafcfe;
-        }
-        .product-details-row td {
-            padding: 0 !important;
-            border: 0;
-            border-left: 4px solid var(--primary-color);
-            border-bottom: 1px solid #e0e0e0; /* Add a line to separate accordions */
-        }
-        .inner-table-wrapper {
-            padding: 10px 10px 10px 30px; /* Indent the content */
-        }
-        .accordion-toggle {
-            display: inline-block;
-            width: 20px;
-            font-family: monospace;
-            font-size: 1.2em;
-            color: var(--primary-color);
-        }
+
     </style>
 </head>
 <body>
@@ -206,7 +183,7 @@
             <div style="display:flex; gap:16px; align-items:center; margin:10px 0; flex-wrap: wrap;">
               <label><input type="checkbox" id="filterMovHoy"> Mostrar sólo con movimiento hoy</label>
               <label><input type="checkbox" id="hideApproved" checked> Ocultar verificados/aprobados</label>
-              <label><input type="checkbox" id="viewCategories"> Visualizar Categorias</label>
+              <label><input type="checkbox" id="viewCategories"> Ordenar por Categorías</label>
               <label><input type="checkbox" id="filterNegativeStock"> Mostrar sólo con stock negativo</label>
               <small style="opacity:.7;">(Los verificados/aprobados aparecen si los buscas por nombre)</small>
             </div>
@@ -247,7 +224,6 @@
     <script>
         let dashboardData = null; // { inventory, estados, ... }
         let estadosMap = {}; // { baseProduct: 'pendiente'|'verificando'|'aprobado' }
-        let openAccordions = new Set(); // To preserve accordion state across re-renders
 
         window.addEventListener('load', () => {
             document.getElementById('filterMovHoy')?.addEventListener('change', renderInventoryTable);
@@ -336,181 +312,86 @@
             }
         }
 
-        function getCategorySummary() {
-            if (!dashboardData?.inventory) return [];
-
-            const categorySummary = new Map();
-
-            dashboardData.inventory.forEach(item => {
-                const category = item.category || 'Sin Categoría';
-                if (!categorySummary.has(category)) {
-                    categorySummary.set(category, {
-                        lastInventory: 0,
-                        purchases: 0,
-                        sales: 0,
-                        expectedStock: 0,
-                        products: []
-                    });
-                }
-
-                const summary = categorySummary.get(category);
-                summary.lastInventory += Number(item.lastInventory) || 0;
-                summary.purchases += Number(item.purchases) || 0;
-                summary.sales += Number(item.sales) || 0;
-                summary.expectedStock += Number(item.expectedStock) || 0;
-                summary.products.push(item);
-            });
-
-            // Convert map to array and sort
-            return Array.from(categorySummary.entries()).map(([category, data]) => ({
-                category,
-                ...data
-            })).sort((a, b) => a.category.localeCompare(b.category));
-        }
-
         function renderCategoryView() {
-            // 1. Change headers for the main category table
+            // 1. Restore footer buttons and original headers
+            document.getElementById('footer-buttons').style.display = 'flex';
             const thead = document.querySelector('#inventory-table thead');
             thead.innerHTML = `
                 <tr>
-                    <th>Categoría</th>
-                    <th class="num">Inv. Ayer</th>
-                    <th class="num">Compras</th>
-                    <th class="num">Ventas</th>
-                    <th class="num">Inv. Hoy</th>
+                    <th><input type="checkbox" id="select-all-checkbox"></th>
+                    <th>Producto Base</th>
+                    <th>Inv. Ayer</th>
+                    <th>Compras</th>
+                    <th>Ventas</th>
+                    <th>Inv. Hoy</th>
+                    <th>Unidad</th>
+                    <th>Estado</th>
+                    <th>Stock Real</th>
                 </tr>
             `;
 
-            // 2. Get and process data
-            const categoryData = getCategorySummary();
             const tbody = document.getElementById('tablaInventarioBody');
             tbody.innerHTML = '';
+            const rows = getDatosFiltrados();
 
-            const q = getSearchText();
-            const filteredCategories = categoryData.filter(cat => {
-                // If searching, filter categories by name OR by matching product names within them
-                if (q) {
-                    const categoryMatch = cat.category.toLowerCase().includes(q);
-                    const productMatch = cat.products.some(p => p.baseProduct.toLowerCase().includes(q));
-                    return categoryMatch || productMatch;
-                }
-                return true;
-            });
-
-            if (filteredCategories.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">No hay categorías o productos que coincidan.</td></tr>`;
+            if (rows.length === 0) {
+                const columnCount = 9;
+                tbody.innerHTML = `<tr><td colspan="${columnCount}" style="text-align:center;">No hay productos que coincidan con los filtros.</td></tr>`;
                 return;
             }
 
-            // 3. Render accordion rows
-            filteredCategories.forEach((cat, index) => {
-                const isInitiallyOpen = openAccordions.has(cat.category);
-
-                // --- Create the main category summary row ---
-                const categoryRow = document.createElement('tr');
-                categoryRow.classList.add('category-row');
-                categoryRow.innerHTML = `
-                    <td><span class="accordion-toggle" id="toggle-${index}">${isInitiallyOpen ? '[-]' : '[+]'}</span> <strong>${cat.category}</strong></td>
-                    <td class="num">${cat.lastInventory.toFixed(2)}</td>
-                    <td class="num">${cat.purchases.toFixed(2)}</td>
-                    <td class="num">${cat.sales.toFixed(2)}</td>
-                    <td class="num"><strong>${cat.expectedStock.toFixed(2)}</strong></td>
-                `;
-                tbody.appendChild(categoryRow);
-
-                // --- Create the hidden row that will contain the nested table ---
-                const productsContainerRow = document.createElement('tr');
-                const productsContainerCell = document.createElement('td');
-                productsContainerCell.colSpan = 5;
-                productsContainerRow.appendChild(productsContainerCell);
-                productsContainerRow.classList.add('product-details-row');
-                if (!isInitiallyOpen) {
-                    productsContainerRow.classList.add('hidden');
-                }
-
-                // --- Create the wrapper and the nested table for products ---
-                const innerTableWrapper = document.createElement('div');
-                innerTableWrapper.className = 'inner-table-wrapper';
-                const innerTable = document.createElement('table');
-                innerTable.style.width = '100%';
-                innerTable.innerHTML = `
-                    <thead>
-                        <tr style="background-color: #fafafa;">
-                            <th style="width: 4%;"><input type="checkbox" class="select-all-in-category-checkbox"></th>
-                            <th>Producto Base</th>
-                            <th class="num">Inv. Ayer</th>
-                            <th class="num">Compras</th>
-                            <th class="num">Ventas</th>
-                            <th class="num">Inv. Hoy</th>
-                            <th>Unidad</th>
-                            <th>Estado</th>
-                            <th>Stock Real</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${cat.products.map(item => {
-                            const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
-                            return `
-                                <tr class="${item.expectedStock <= 0 ? 'low-stock' : ''}" data-product-base="${item.baseProduct}">
-                                    <td><input type="checkbox" class="mass-approval-checkbox" data-base="${item.baseProduct}"></td>
-                                    <td>${item.baseProduct}</td>
-                                    <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
-                                    <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
-                                    <td class="num">${Number(item.sales||0).toFixed(2)}</td>
-                                    <td class="num"><strong>${Number(item.expectedStock||0).toFixed(2)}</strong></td>
-                                    <td>${item.unit || ''}</td>
-                                    <td>
-                                      <span class="${estadoBadgeClass(estado)}" style="margin-right:6px;">${estado}</span>
-                                      <input type="checkbox" class="approval-checkbox" data-base="${item.baseProduct}" ${estado === 'aprobado' ? 'checked' : ''} style="vertical-align: middle;">
-                                    </td>
-                                    <td><input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/></td>
-                                </tr>`;
-                        }).join('')}
-                    </tbody>
-                `;
-
-                innerTableWrapper.appendChild(innerTable);
-                productsContainerCell.appendChild(innerTableWrapper);
-                tbody.appendChild(productsContainerRow);
-
-                // --- Add click listener to toggle the accordion ---
-                categoryRow.addEventListener('click', () => {
-                    const isCurrentlyOpen = !productsContainerRow.classList.contains('hidden');
-
-                    // If attempting to close, check for dirty inputs
-                    if (isCurrentlyOpen) {
-                        let isDirty = false;
-                        productsContainerRow.querySelectorAll('.real-stock-input').forEach(input => {
-                            if (input.dataset.isDirty === 'true') {
-                                isDirty = true;
-                            }
-                        });
-
-                        if (isDirty) {
-                            alert('No puedes cerrar este acordeón porque tienes cambios sin guardar. Guarda los cambios o actualiza los datos para descartarlos.');
-                            return; // Prevent closing
-                        }
-                    }
-
-                    // Toggle display by class
-                    productsContainerRow.classList.toggle('hidden');
-                    const isHiddenAfterToggle = productsContainerRow.classList.contains('hidden');
-                    document.getElementById(`toggle-${index}`).textContent = isHiddenAfterToggle ? '[+]' : '[-]';
-
-                    // Update state
-                    if(isHiddenAfterToggle) {
-                        openAccordions.delete(cat.category);
-                    } else {
-                        openAccordions.add(cat.category);
-                    }
-                });
+            // 2. Sort data by category, then by product name
+            rows.sort((a, b) => {
+                const catA = a.category || 'Sin Categoría';
+                const catB = b.category || 'Sin Categoría';
+                if (catA < catB) return -1;
+                if (catA > catB) return 1;
+                return a.baseProduct.localeCompare(b.baseProduct);
             });
 
-            // 4. Hide main footer buttons (mass approval might be re-added per category later)
-            document.getElementById('footer-buttons').style.display = 'none';
+            let currentCategory = null;
+            rows.forEach(item => {
+                const itemCategory = item.category || 'Sin Categoría';
 
-            // 5. Add event listeners for the interactive elements inside all the new tables
-            addEventListeners(); // This will now apply to all rendered product rows
+                // 3. If category is new, add a header row
+                if (itemCategory !== currentCategory) {
+                    currentCategory = itemCategory;
+                    const categoryHeaderRow = document.createElement('tr');
+                    categoryHeaderRow.classList.add('category-header-row');
+                    categoryHeaderRow.innerHTML = `<td colspan="9">${currentCategory}</td>`;
+                    tbody.appendChild(categoryHeaderRow);
+                }
+
+                // 4. Render product row (logic from renderProductView)
+                const estado = (estadosMap[item.baseProduct] || 'pendiente').toLowerCase();
+                const tr = document.createElement('tr');
+                if (item.error) {
+                    tr.classList.add('error-row');
+                    tr.title = item.errorMsg || 'Inconsistencia detectada';
+                }
+                if (item.expectedStock <= 0) {
+                    tr.classList.add('low-stock');
+                }
+                tr.dataset.productBase = item.baseProduct;
+                tr.innerHTML = `
+                    <td><input type="checkbox" class="mass-approval-checkbox" data-base="${item.baseProduct}"></td>
+                    <td>${item.baseProduct}</td>
+                    <td class="num">${Number(item.lastInventory||0).toFixed(2)}</td>
+                    <td class="num">${Number(item.purchases||0).toFixed(2)}</td>
+                    <td class="num">${Number(item.sales||0).toFixed(2)}</td>
+                    <td class="num"><strong>${Number(item.expectedStock||0).toFixed(2)}</strong></td>
+                    <td>${item.unit || ''}</td>
+                    <td>
+                      <span class="${estadoBadgeClass(estado)}" style="margin-right:6px;">${estado}</span>
+                      <input type="checkbox" class="approval-checkbox" data-base="${item.baseProduct}" ${estado === 'aprobado' ? 'checked' : ''} style="vertical-align: middle;">
+                    </td>
+                    <td><input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/></td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            // 5. Add event listeners
+            addEventListeners();
         }
 
         function renderProductView() {
