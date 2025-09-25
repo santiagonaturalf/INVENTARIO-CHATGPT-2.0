@@ -163,152 +163,97 @@ function calcularInventarioDiario() {
   try {
     // --- 1. OBTENER DATOS ---
     const hojaSku = ss.getSheetByName(HOJA_SKU);
-    const hojaOrders = ss.getSheetByName(HOJA_ORDERS);
     const hojaAdquisiciones = ss.getSheetByName(HOJA_ADQUISICIONES);
     const hojaHistorico = ss.getSheetByName(HOJA_HISTORICO);
     const hojaReporteHoy = ss.getSheetByName(HOJA_REPORTE_HOY);
 
-    // Obtener datos de las hojas, omitiendo encabezados (fila 1)
     const datosSku = hojaSku.getRange("A2:K" + hojaSku.getLastRow()).getValues();
-    // Se lee hasta la columna Z para obtener el "Producto Base"
-    const datosOrders = hojaOrders.getRange("A2:Z" + hojaOrders.getLastRow()).getValues();
     const datosAdquisiciones = hojaAdquisiciones.getRange("A2:M" + hojaAdquisiciones.getLastRow()).getValues();
     const datosHistorico = hojaHistorico.getLastRow() > 1 ? hojaHistorico.getRange("A2:E" + hojaHistorico.getLastRow()).getValues() : [];
 
-    // --- 2. PREPARAR MAPAS DE BÚSQUEDA (Lookups) ---
-    // El mapa de ventas ahora solo necesita el factor de conversión desde SKU.
-    const mapaVentaSku = new Map(); // Key: Nombre Producto, Value: cantVenta (factor)
-    const mapaCompraSku = new Map(); // Key: 'Producto Base-Formato Adquisición', Value: cantAdquisicion
+    // --- 2. PREPARAR MAPAS DE BÚSQUEDA (Lookups) con normalización mejorada ---
+    const mapaCompraSku = new Map();
+    const baseOriginalNames = new Map(); // Mapa de nombre normalizado a nombre original
 
     datosSku.forEach(fila => {
-      const [nombreProducto, productoBase, formatoAdq, cantAdq, , , cantVenta] = fila;
-      if (nombreProducto) {
-        // Key: Nombre Producto (normalizado), Value: Cantidad Venta (factor de conversión)
-        mapaVentaSku.set(norm(nombreProducto), parseFloat(String(cantVenta).replace(',','.')) || 0);
-      }
-      if (productoBase && formatoAdq) {
-        const claveCompra = `${norm(productoBase)}-${formatoAdq.toString().trim()}`;
-        mapaCompraSku.set(claveCompra, parseFloat(String(cantAdq).replace(',','.')) || 0);
-      }
-    });
-
-    // --- 3. PROCESAR VENTAS DEL DÍA ---
-    const ventasDelDia = {}; // { "Producto Base": cantidad, ... }
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0); // Inicio del día en la zona horaria del script
-
-    datosOrders.forEach(fila => {
-      const fechaPedido = new Date(fila[8]); // Columna I: Fecha
-      if (fechaPedido >= hoy) {
-        const cantidadRaw = String(fila[10]); // Columna K: Cantidad (raw)
-        // Si la cantidad contiene 'E', es un item eliminado y se debe omitir.
-        if (cantidadRaw.toUpperCase().includes('E')) {
-          return;
+      const [productoBase, formatoAdq, cantAdq] = [fila[1], fila[2], fila[3]];
+      if (productoBase) {
+        const productoBaseNorm = normalizeText(productoBase);
+        if (!baseOriginalNames.has(productoBaseNorm)) {
+          baseOriginalNames.set(productoBaseNorm, productoBase);
         }
-
-        const nombreProductoVendido = fila[9]; // Columna J: Nombre Producto
-        const cantidadVendida = parseFloat(cantidadRaw.replace(',','.')) || 0;
-        const productoBase = fila[25]; // Columna Z: Producto Base
-
-        // Si no hay producto base en la fila, no se puede procesar.
-        if (!productoBase) return;
-
-        const factorConversion = mapaVentaSku.get(norm(nombreProductoVendido));
-
-        if (factorConversion !== undefined) {
-          const ventaEnUnidadBase = cantidadVendida * factorConversion;
-          sumarAObjeto(ventasDelDia, norm(productoBase), ventaEnUnidadBase);
+        if (formatoAdq) {
+          const claveCompra = `${productoBaseNorm}-${formatoAdq.toString().trim()}`;
+          mapaCompraSku.set(claveCompra, parseFloat(String(cantAdq).replace(',', '.')) || 0);
         }
       }
     });
+
+    // --- 3. PROCESAR VENTAS DEL DÍA (NUEVA LÓGICA) ---
+    const { ventasPorProductoBase, filasIgnoradas } = calculateVentasDelDia();
+    Logger.log(`Se ignoraron ${filasIgnoradas} filas de 'Orders' marcadas con 'E'.`);
 
     // --- 4. PROCESAR COMPRAS DEL DÍA ---
-    const comprasDelDia = {}; // { "Producto Base": cantidad, ... }
+    const comprasDelDia = new Map();
     datosAdquisiciones.forEach(fila => {
-      // Asumimos que la fecha relevante está en la columna B (Producto Base) y que es la fecha de adquisición
-      // NOTA: La lógica de fecha aquí puede necesitar ajuste según la estructura real de "Adquisiciones".
-      // Por ahora, procesaremos todas las adquisiciones como si fueran del día.
-      // Para una implementación real, se necesitaría una columna de fecha en la hoja Adquisiciones.
-      // Si la columna C es la fecha, sería: const fechaAdq = new Date(fila[2]);
-      const productoBase = fila[1]; // Columna B: Producto Base
-      const formatoCompra = fila[2]; // Columna C: Formato de Compra
-      const cantidadComprada = parseFloat(String(fila[3]).replace(',','.')) || 0; // Columna D: Cantidad a Comprar
+      const productoBase = fila[1];
+      const formatoCompra = fila[2];
+      const cantidadComprada = parseFloat(String(fila[3]).replace(',', '.')) || 0;
 
       if (!productoBase || !formatoCompra) return;
 
-      // Extraer el formato base. Ej: "Paquete" de "Paquete (4 Kg)"
+      const productoBaseNorm = normalizeText(productoBase);
       const formatoAdq = _getFormatoAdquisicionBase(formatoCompra);
-
-      const claveCompra = `${norm(productoBase)}-${formatoAdq}`;
+      const claveCompra = `${productoBaseNorm}-${formatoAdq}`;
       const cantAdquisicion = mapaCompraSku.get(claveCompra);
 
       if (cantAdquisicion) {
         const compraEnUnidadBase = cantidadComprada * cantAdquisicion;
-        sumarAObjeto(comprasDelDia, norm(productoBase), compraEnUnidadBase);
+        comprasDelDia.set(productoBaseNorm, (comprasDelDia.get(productoBaseNorm) || 0) + compraEnUnidadBase);
       }
     });
 
     // --- 5. OBTENER INVENTARIO DE AYER ---
-    const inventarioAyer = {}; // { "Producto Base": cantidad, ... }
+    const inventarioAyer = new Map();
     const productosVistos = new Set();
-    // Recorrer el histórico desde el final para encontrar la última entrada de cada producto
     for (let i = datosHistorico.length - 1; i >= 0; i--) {
-        const fila = datosHistorico[i];
-        const productoBase = fila[1];
-        if (productoBase) {
-            const key = norm(productoBase);
-            if (!productosVistos.has(key)) {
-                const stockReal = parseFloat(fila[2]); // Columna C es "Stock Real" en la nueva estructura
-                inventarioAyer[key] = stockReal || 0;
-                productosVistos.add(key);
-            }
+      const fila = datosHistorico[i];
+      const productoBase = fila[1];
+      if (productoBase) {
+        const key = normalizeText(productoBase);
+        if (!productosVistos.has(key)) {
+          inventarioAyer.set(key, parseFloat(fila[2]) || 0);
+          productosVistos.add(key);
         }
+      }
     }
 
-    // --- 6. CALCULAR INVENTARIO DE HOY Y PREPARAR REPORTE ---
-    const todosLosProductos = new Set(datosSku.map(row => row[1]).filter(Boolean).map(norm));
-    const reporteHoy = [];
-    const nuevoHistorico = [];
-    const timestamp = new Date();
-
-    todosLosProductos.forEach(producto => {
-      const ayer = inventarioAyer[producto] || 0;
-      const compras = comprasDelDia[producto] || 0;
-      const ventas = ventasDelDia[producto] || 0;
-      const hoy = ayer + compras - ventas;
-
-      const skuInfo = mapaVentaSku.get(producto) || {}; // Para obtener unidad de venta
-
-      reporteHoy.push([
-        producto,
-        ayer,
-        compras,
-        ventas,
-        hoy,
-        "" // Stock Real (editable por el usuario)
-      ]);
-
-    });
-
-    // --- 7. ESCRIBIR RESULTADOS EN LAS HOJAS ---
-    // Limpiar reporte anterior y escribir el nuevo
+    // --- 6. ACTUALIZAR COLUMNA "VENTAS DEL DÍA" EN REPORTE HOY ---
     if (hojaReporteHoy.getLastRow() > 1) {
-      hojaReporteHoy.getRange(2, 1, hojaReporteHoy.getLastRow() - 1, 7).clearContent();
-    }
-    if (reporteHoy.length > 0) {
-      hojaReporteHoy.getRange(2, 1, reporteHoy.length, 6).setValues(reporteHoy);
-      // Añadir fórmula de discrepancia en la columna G
-      const formulaRange = hojaReporteHoy.getRange(2, 7, reporteHoy.length);
-      formulaRange.setFormulaR1C1('=IF(RC[-1]<>"", RC[-1]-RC[-2], "")');
+      const rangoReporte = hojaReporteHoy.getRange(2, 1, hojaReporteHoy.getLastRow() - 1, 4);
+      const valoresReporte = rangoReporte.getValues();
+      const nuevasVentas = [];
+
+      for(const row of valoresReporte) {
+        const productoBase = row[0];
+        const productoBaseNorm = normalizeText(productoBase);
+        const venta = ventasPorProductoBase.get(productoBaseNorm) || 0;
+        nuevasVentas.push([venta]);
+      }
+
+      hojaReporteHoy.getRange(2, 4, nuevasVentas.length, 1).setValues(nuevasVentas);
     }
 
-    ui.showModalDialog(HtmlService.createHtmlOutput('<h3>¡Éxito!</h3><p>El cálculo del inventario ha finalizado.</p>'), 'Proceso Completado');
-    // Cerrar el diálogo automáticamente después de unos segundos
+    // --- 7. (Opcional) Refrescar cálculos dependientes si es necesario ---
+    // Si otras columnas dependen de "Ventas del Día" y no se recalculan solas,
+    // se podría necesitar un flush o re-setear fórmulas. Por ahora, se asume que las fórmulas
+    // en la hoja se actualizan automáticamente.
+
+    ui.showModalDialog(HtmlService.createHtmlOutput('<h3>¡Éxito!</h3><p>El cálculo de "Ventas del Día" ha finalizado y la columna ha sido actualizada.</p>'), 'Proceso Completado');
     Utilities.sleep(4000);
     const activeDoc = SpreadsheetApp.getActive();
     const html = HtmlService.createHtmlOutput("<script>google.script.host.close()</script>");
     ui.showModalDialog(html, "Cerrando...");
-
 
   } catch (e) {
     Logger.log(e);
@@ -564,6 +509,23 @@ function _getFormatoAdquisicionBase(formatoCompra) {
 // =========================
 // Helpers de normalización
 // =========================
+
+/**
+ * Normaliza un texto de forma robusta: quita acentos, convierte a minúsculas,
+ * recorta espacios y elimina espacios duplicados.
+ * @param {string} text El texto a normalizar.
+ * @returns {string} El texto normalizado.
+ */
+function normalizeText(text) {
+  if (!text) return '';
+  return text.toString()
+    .trim()
+    .toLowerCase()
+    .normalize("NFD") // Descompone acentos y caracteres especiales
+    .replace(/[\u0300-\u036f]/g, "") // Elimina los diacríticos (acentos)
+    .replace(/\s+/g, ' '); // Reemplaza uno o más espacios por uno solo
+}
+
 function normalizeUnit(uRaw) {
   if (!uRaw) return '';
   const u = ('' + uRaw).trim().toLowerCase()
@@ -740,6 +702,79 @@ function setEstadoProducto(baseProduct, estado, notas) {
 // =====================================================================================
 // LÓGICA DE CÁLCULO DE VENTAS (NUEVO)
 // =====================================================================================
+
+/**
+ * Calcula las "Ventas del Día" de forma determinística desde las hojas Orders y SKU.
+ * Esta función procesa todas las filas de Orders, excepto las marcadas como eliminadas.
+ * Normaliza textos, maneja errores de parseo y agrupa las ventas por Producto Base.
+ *
+ * @returns {{ventasPorProductoBase: Map<string, number>, filasIgnoradas: number}}
+ * Objeto con un mapa de ventas acumuladas por producto base y el conteo de filas ignoradas.
+ */
+function calculateVentasDelDia() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const hojaSku = ss.getSheetByName(HOJA_SKU);
+  const hojaOrders = ss.getSheetByName(HOJA_ORDERS);
+
+  if (!hojaSku || !hojaOrders) {
+    throw new Error("No se encontraron las hojas SKU u Orders.");
+  }
+
+  // Paso 2a: Construir el mapa de SKU.
+  const productToSkuMap = new Map();
+  const datosSku = hojaSku.getRange(2, 1, hojaSku.getLastRow() - 1, 7).getValues(); // A:G
+
+  datosSku.forEach(row => {
+    const nombreProducto = row[0]; // Col A
+    const productoBase = row[1];   // Col B
+    const cantidadVentaRaw = row[6]; // Col G
+
+    if (nombreProducto) {
+      const cantidadVenta = parseFloat(String(cantidadVentaRaw || '0').replace(',', '.')) || 0;
+      productToSkuMap.set(normalizeText(nombreProducto), {
+        productoBaseNormalizado: normalizeText(productoBase),
+        cantidadVenta: cantidadVenta
+      });
+    }
+  });
+
+  // Paso 2b y 2c: Procesar la hoja Orders, filtrar y agregar.
+  const ventasPorProductoBase = new Map();
+  let filasIgnoradas = 0;
+  const datosOrders = hojaOrders.getRange(2, 1, hojaOrders.getLastRow() - 1, 26).getValues(); // A:Z
+
+  datosOrders.forEach(row => {
+    const cantidadRaw = String(row[10] || ''); // Col K: Cantidad
+
+    if (cantidadRaw.trim().toUpperCase().startsWith('E')) {
+      filasIgnoradas++;
+      return; // Ignorar fila
+    }
+
+    const nombreProducto = row[9];  // Col J: Nombre Producto
+    const productoBase = row[25]; // Col Z: Producto Base
+
+    if (!nombreProducto || !productoBase) {
+      return; // Si falta el nombre o el base, no se puede procesar
+    }
+
+    const cantidad = parseFloat(cantidadRaw.replace(',', '.')) || 0;
+    const nombreProductoNormalizado = normalizeText(nombreProducto);
+    const productoBaseNormalizado = normalizeText(productoBase);
+
+    const skuInfo = productToSkuMap.get(nombreProductoNormalizado);
+
+    if (skuInfo) {
+      const ventaBaseSKU = cantidad * skuInfo.cantidadVenta;
+      const totalActual = ventasPorProductoBase.get(productoBaseNormalizado) || 0;
+      ventasPorProductoBase.set(productoBaseNormalizado, totalActual + ventaBaseSKU);
+    }
+    // Si no hay SKU, la venta es 0 y no se suma, como se especificó.
+  });
+
+  return { ventasPorProductoBase, filasIgnoradas };
+}
+
 
 /***** CONFIG *****/
 const CFG = {
