@@ -1123,42 +1123,68 @@ function getComprasPorBase_Correcto(adqSheet, skuSheet) {
 
 function getDashboardData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const skuSheet       = ss.getSheetByName(HOJA_SKU);
-  const ordersSheet    = ss.getSheetByName(HOJA_ORDERS);
-  const adqSheet       = ss.getSheetByName(HOJA_ADQUISICIONES);
-  const histSheet      = ss.getSheetByName(HOJA_HISTORICO);
+  const skuSheet = ss.getSheetByName(HOJA_SKU);
+  const reporteSheet = ss.getSheetByName(HOJA_REPORTE_HOY);
+  const histSheet = ss.getSheetByName(HOJA_HISTORICO);
 
-  if (!skuSheet || !ordersSheet) {
-    // This will be caught by the .withFailureHandler on the client side.
-    throw new Error('No se encontraron las hojas SKU u Orders.');
+  if (!skuSheet || !reporteSheet) {
+    throw new Error(`No se encontraron las hojas requeridas: ${HOJA_SKU} o ${HOJA_REPORTE_HOY}.`);
   }
 
-  // --- Validar que las hojas principales no estén vacías ---
   if (skuSheet.getLastRow() < 2) {
-    return { inventory: [], estados: {}, error: `La hoja "${HOJA_SKU}" está vacía o solo contiene encabezados. Por favor, asegúrate de que tenga datos.` };
+    return { inventory: [], estados: {}, error: `La hoja "${HOJA_SKU}" está vacía o solo contiene encabezados.` };
   }
-  if (ordersSheet.getLastRow() < 2) {
-    return { inventory: [], estados: {}, error: `La hoja "${HOJA_ORDERS}" está vacía o solo contiene encabezados. Por favor, asegúrate de que tenga datos.` };
+  if (reporteSheet.getLastRow() < 2) {
+    return { inventory: [], estados: {}, error: `La hoja "${HOJA_REPORTE_HOY}" está vacía. Ejecute el cálculo diario primero.` };
   }
 
-
-  // === 1) Mapa SKU: {productoBase, cantidadVenta, unidadVenta, categoria}
-  const skuData = skuSheet.getRange(2, 1, Math.max(0, skuSheet.getLastRow()-1), 8).getValues();
-  const skuMap = new Map();
-  const baseInfoMap = new Map(); // Unifica la info por producto base
+  // === 1) Mapa SKU: {original, unit, category} por producto base normalizado
+  const skuData = skuSheet.getRange(2, 1, Math.max(0, skuSheet.getLastRow() - 1), 8).getValues();
+  const baseInfoMap = new Map();
   skuData.forEach(r => {
-    const nombreProd = r[0]; // Col A
     const productoBase = r[1]; // Col B
-    const categoria = r[5]; // Col F
-    const cantidadVenta = parseFloat((r[6] || '0').toString().replace(',', '.')) || 0;
-    const unidadVenta   = r[7] || '';
-    if (nombreProd) skuMap.set(norm(nombreProd), { productoBase, cantidadVenta, unidadVenta });
+    const categoria = r[5];    // Col F
+    const unidadVenta = r[7];  // Col H
     if (productoBase && !baseInfoMap.has(norm(productoBase))) {
-      baseInfoMap.set(norm(productoBase), { original: productoBase, unit: unidadVenta, category: categoria });
+      baseInfoMap.set(norm(productoBase), { original: productoBase, unit: unidadVenta || '', category: categoria || '' });
     }
   });
 
-  // === 2) Último inventario por Producto Base (Inv. Ayer)
+  // === 2) Leer datos del "Reporte Hoy" y crear un mapa
+  const reporteData = reporteSheet.getRange(2, 1, reporteSheet.getLastRow() - 1, 5).getValues();
+  const reporteMap = new Map();
+  reporteData.forEach(row => {
+    const [productoBase, invAyer, compras, ventas, invEstimado] = row;
+    if (productoBase) {
+      reporteMap.set(norm(productoBase), {
+        lastInventory: parseFloat(String(invAyer || '0').replace(',', '.')) || 0,
+        purchases: parseFloat(String(compras || '0').replace(',', '.')) || 0,
+        sales: parseFloat(String(ventas || '0').replace(',', '.')) || 0,
+        expectedStock: parseFloat(String(invEstimado || '0').replace(',', '.')) || 0,
+      });
+    }
+  });
+
+  // === 3) Armar inventory[] para el Dashboard
+  const inventory = [];
+  baseInfoMap.forEach((info, key) => {
+    const reporteInfo = reporteMap.get(key);
+    const hasError = !reporteInfo;
+
+    inventory.push({
+      baseProduct: info.original,
+      lastInventory: hasError ? 0 : reporteInfo.lastInventory,
+      purchases: hasError ? 0 : reporteInfo.purchases,
+      sales: hasError ? 0 : reporteInfo.sales,
+      expectedStock: hasError ? 0 : reporteInfo.expectedStock,
+      unit: info.unit,
+      category: info.category,
+      error: hasError,
+      errorMsg: hasError ? "Producto no encontrado en el reporte de hoy." : ""
+    });
+  });
+
+  // === 4) Lógica de estados (se mantiene, pero necesita lastInvMap)
   const lastInvMap = new Map();
   if (histSheet && histSheet.getLastRow() > 1) {
     const histData = histSheet.getRange(2, 1, histSheet.getLastRow() - 1, 4).getValues();
@@ -1180,64 +1206,35 @@ function getDashboardData() {
     });
   }
 
-  // === 3) Ventas del día (lógica corregida)
-  const ventasHoyObj = getVentasPorBaseHoy_JSON(); // Llama a la función correcta
-  const ventasPorBase = new Map(Object.entries(ventasHoyObj)); // Convierte el objeto a un Map
-
-  // === 4) Compras hoy (Cálculo correcto basado en Adquisiciones y SKU)
-  const comprasPorBase = getComprasPorBase_Correcto(adqSheet, skuSheet);
-
-  // === 5) Armar inventory[] para el Dashboard
-  const inventory = [];
-  baseInfoMap.forEach((info, key) => {
-    const lastInv = lastInvMap.get(key);
-    const lastInventory = lastInv ? lastInv.qty : 0;
-    const sales    = ventasPorBase.get(key)   || 0;
-    const purchases= comprasPorBase.get(key)  || 0;
-
-    inventory.push({
-      baseProduct:  info.original, // Usar el nombre original para mostrar
-      lastInventory: lastInventory,
-      purchases:    purchases,
-      sales:        sales,
-      expectedStock: lastInventory + purchases - sales,
-      unit:         info.unit || '',
-      category:     info.category || '',
-      error:        false,
-      errorMsg:     ""
-    });
-  });
-
   const persistedStates = getEstadosParaUI();
   const adjustedStates = {};
-
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  baseInfoMap.forEach((info, base) => {
-    const persistedState = persistedStates[base] || 'pendiente';
+  baseInfoMap.forEach((info, baseNorm) => {
+    const persistedState = persistedStates[info.original] || 'pendiente';
     if (persistedState === 'aprobado') {
-      const lastInv = lastInvMap.get(base);
+      const lastInv = lastInvMap.get(baseNorm);
       if (lastInv && lastInv.ts) {
         const lastInvDate = new Date(lastInv.ts);
         lastInvDate.setHours(0, 0, 0, 0);
         if (lastInvDate.getTime() < today.getTime()) {
-          adjustedStates[base] = 'pendiente'; // Reset state for UI
+          adjustedStates[info.original] = 'pendiente';
         } else {
-          adjustedStates[base] = 'aprobado'; // Keep approved for today
+          adjustedStates[info.original] = 'aprobado';
         }
       } else {
-        adjustedStates[base] = 'pendiente'; // No history, should be pending
+        adjustedStates[info.original] = 'pendiente';
       }
     } else {
-      adjustedStates[base] = persistedState;
+      adjustedStates[info.original] = persistedState;
     }
   });
 
   return {
     inventory: inventory,
-    sales: [],
-    acquisitions: [],
+    sales: [], // Estos ya no se calculan aquí, se devuelven vacíos
+    acquisitions: [], // Estos ya no se calculan aquí, se devuelven vacíos
     estados: adjustedStates
   };
 }
