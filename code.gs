@@ -161,6 +161,26 @@ function calcularInventarioDiario() {
   ui.showModalDialog(HtmlService.createHtmlOutput('<h3>Procesando inventario...</h3><p>Este proceso puede tardar unos minutos. Por favor, no cierres la hoja.</p>'), 'Cálculo de Inventario en Curso');
 
   try {
+    // --- INICIO: Limpiar estados aprobados al iniciar el día ---
+    const hojaEstados = ss.getSheetByName('Estados');
+    if (hojaEstados && hojaEstados.getLastRow() > 1) {
+      const data = hojaEstados.getDataRange().getValues();
+      const rowsToDelete = [];
+      // Itera desde la segunda fila (índice 1) para saltar el encabezado.
+      for (let i = 1; i < data.length; i++) {
+        // El estado está en la columna B (índice 1).
+        if (data[i][1] && data[i][1].toString().toLowerCase() === 'aprobado') {
+          // Se guarda el número de fila real (i + 1).
+          rowsToDelete.push(i + 1);
+        }
+      }
+      // Elimina las filas en orden inverso para evitar problemas con los índices.
+      for (let i = rowsToDelete.length - 1; i >= 0; i--) {
+        hojaEstados.deleteRow(rowsToDelete[i]);
+      }
+    }
+    // --- FIN: Limpieza ---
+
     // --- 1. OBTENER DATOS ---
     const hojaSku = ss.getSheetByName(HOJA_SKU);
     const hojaAdquisiciones = ss.getSheetByName(HOJA_ADQUISICIONES);
@@ -1187,68 +1207,24 @@ function getDashboardData() {
     });
   });
 
-  // === 4) Lógica de estados (modificada)
-  const lastInvMap = new Map();
-  if (histSheet && histSheet.getLastRow() > 1) {
-    const histData = histSheet.getRange(2, 1, histSheet.getLastRow() - 1, 4).getValues();
-    histData.forEach(r => {
-      const ts = r[0];
-      const base = r[1];
-      const qty = parseFloat((r[2] || '0').toString().replace(',', '.'));
-      const realQty = parseFloat((r[3] || '').toString().replace(',', '.'));
-
-      const when = (ts instanceof Date) ? ts : new Date(ts);
-      if (!base || isNaN(when.getTime())) return;
-
-      const currentQty = !isNaN(realQty) ? realQty : qty;
-      const key = norm(base);
-      const prev = lastInvMap.get(key);
-      if (!prev || when > prev.ts) {
-        lastInvMap.set(key, { ts: when, qty: currentQty });
-      }
-    });
-  }
-
-  const persistedStates = getEstadosParaUI();
-  const adjustedStates = {};
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // === 4) Lógica de estados (simplificada) ---
+  // La fuente de la verdad para el estado de un producto es la hoja "Estados".
+  // Esta función simplemente lee los estados persistidos y los devuelve.
+  // El reseteo de estados "aprobados" ahora se maneja exclusivamente en `calcularInventarioDiario`.
+  const persistedStates = getEstadosParaUI(); // Devuelve { [normalizedBase]: state }
+  const finalStates = {};
 
   baseInfoMap.forEach((info, baseNorm) => {
-    const reporteInfo = reporteMap.get(baseNorm);
-    const stockRealValue = reporteInfo ? reporteInfo.stockReal : null;
-
-    // **NUEVA REGLA**: Si hay un valor en "Stock Real", el estado es "aprobado".
-    if (stockRealValue !== null && stockRealValue !== '') {
-        adjustedStates[info.original] = 'aprobado';
-    } else {
-        // Lógica anterior si "Stock Real" está vacío.
-        // La clave para `persistedStates` ahora debe ser normalizada.
-        const persistedState = persistedStates[baseNorm] || 'pendiente';
-        if (persistedState === 'aprobado') {
-            const lastInv = lastInvMap.get(baseNorm);
-            if (lastInv && lastInv.ts) {
-                const lastInvDate = new Date(lastInv.ts);
-                lastInvDate.setHours(0, 0, 0, 0);
-                if (lastInvDate.getTime() < today.getTime()) {
-                    adjustedStates[info.original] = 'pendiente';
-                } else {
-                    adjustedStates[info.original] = 'aprobado';
-                }
-            } else {
-                adjustedStates[info.original] = 'pendiente';
-            }
-        } else {
-            adjustedStates[info.original] = persistedState;
-        }
-    }
+    // El nombre original del producto (con mayúsculas/minúsculas) se usa como clave en el objeto final.
+    // El estado se busca usando el nombre normalizado. Si no se encuentra, se asume 'pendiente'.
+    finalStates[info.original] = persistedStates[baseNorm] || 'pendiente';
   });
 
   return {
     inventory: inventory,
     sales: [], // Estos ya no se calculan aquí, se devuelven vacíos
     acquisitions: [], // Estos ya no se calculan aquí, se devuelven vacíos
-    estados: adjustedStates
+    estados: finalStates
   };
 }
 
