@@ -146,6 +146,30 @@
             transform: scale(0.98);
         }
 
+        .zero-out-button {
+            background-color: var(--secondary-color);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            padding: 0;
+            line-height: 28px;
+            flex-shrink: 0; /* Prevent button from shrinking */
+        }
+        .zero-out-button:hover {
+            background-color: #d98e1a;
+        }
+
+        .stock-input-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
         .low-stock { background-color: #FFF0F0; }
         .negative-stock { background-color: #FFDADA; font-weight: bold; }
         .error-row { background-color: #ffe5e5 !important; }
@@ -425,7 +449,12 @@
                       <span class="${estadoBadgeClass(estado)}" style="margin-right:6px;">${estado}</span>
                       <input type="checkbox" class="approval-checkbox" data-base="${item.baseProduct}" ${estado === 'aprobado' ? 'checked' : ''} style="vertical-align: middle;">
                     </td>
-                    <td><input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/></td>
+                    <td>
+                        <div class="stock-input-wrapper">
+                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/>
+                            <button class="zero-out-button" data-base="${item.baseProduct}" title="Poner en Cero y Aprobar">0</button>
+                        </div>
+                    </td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -483,7 +512,12 @@
                       <span class="${estadoBadgeClass(estado)}" style="margin-right:6px;">${estado}</span>
                       <input type="checkbox" class="approval-checkbox" data-base="${item.baseProduct}" ${estado === 'aprobado' ? 'checked' : ''} style="vertical-align: middle;">
                     </td>
-                    <td><input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/></td>
+                    <td>
+                        <div class="stock-input-wrapper">
+                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/>
+                            <button class="zero-out-button" data-base="${item.baseProduct}" title="Poner en Cero y Aprobar">0</button>
+                        </div>
+                    </td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -674,6 +708,20 @@
                     innerTable.querySelectorAll('.mass-approval-checkbox').forEach(productCheckbox => {
                         productCheckbox.checked = this.checked;
                     });
+                });
+            });
+
+            // --- Zero Out Button (works for both views) ---
+            tbody.querySelectorAll('.zero-out-button').forEach(button => {
+                button.addEventListener('click', function() {
+                    const base = this.dataset.base;
+                    // Immediately set the input value to 0 for instant feedback
+                    const input = this.closest('tr').querySelector('.real-stock-input');
+                    if (input) {
+                        input.value = "0.00";
+                    }
+                    // Call the save function to approve with quantity 0
+                    handleItemSave([{ productBase: base, quantity: 0, state: 'aprobado' }]);
                 });
             });
         }
