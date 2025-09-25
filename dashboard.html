@@ -172,6 +172,7 @@
 
         .low-stock { background-color: #FFF0F0; }
         .negative-stock { background-color: #FFDADA; font-weight: bold; }
+        .row-saved { background-color: #E6FFED !important; } /* Green for saved rows */
         .error-row { background-color: #ffe5e5 !important; }
         .error-row:hover { background-color: #ffdddd !important; }
         .badge { padding:2px 6px; border-radius:10px; font-size:12px; }
@@ -524,9 +525,15 @@
                 .withSuccessHandler(response => {
                     setLoadingState(false);
                     if (response.success && response.updatedProducts) {
-                        // Update local state from the response for data consistency,
-                        // even though we are not re-rendering immediately.
+                        // Update local state and apply visual feedback.
                         response.updatedProducts.forEach(updatedProd => {
+                            // Find the table row and apply the saved style.
+                            const row = document.querySelector(`tr[data-product-base="${updatedProd.productBase}"]`);
+                            if (row) {
+                                row.classList.add('row-saved');
+                            }
+
+                            // Update local state for data consistency.
                             if (updatedProd.state) {
                                 estadosMap[updatedProd.productBase] = updatedProd.state;
                             }
