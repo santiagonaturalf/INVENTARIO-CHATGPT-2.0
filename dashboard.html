@@ -164,6 +164,24 @@
             background-color: #d98e1a;
         }
 
+        .approve-button {
+            background-color: #28a745; /* Green */
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            padding: 0;
+            line-height: 28px;
+            flex-shrink: 0;
+        }
+        .approve-button:hover {
+            background-color: #218838;
+        }
+
         .stock-input-wrapper {
             display: flex;
             align-items: center;
@@ -448,7 +466,8 @@
                     </td>
                     <td>
                         <div class="stock-input-wrapper">
-                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/>
+                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock||0).toFixed(2)}"/>
+                            <button class="approve-button" data-base="${item.baseProduct}" data-estimated="${Number(item.expectedStock||0).toFixed(2)}" title="Aprobar Stock Estimado">&#x2713;</button>
                             <button class="zero-out-button" data-base="${item.baseProduct}" title="Poner en Cero y Aprobar">0</button>
                         </div>
                     </td>
@@ -508,7 +527,8 @@
                     </td>
                     <td>
                         <div class="stock-input-wrapper">
-                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/>
+                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock||0).toFixed(2)}"/>
+                            <button class="approve-button" data-base="${item.baseProduct}" data-estimated="${Number(item.expectedStock||0).toFixed(2)}" title="Aprobar Stock Estimado">&#x2713;</button>
                             <button class="zero-out-button" data-base="${item.baseProduct}" title="Poner en Cero y Aprobar">0</button>
                         </div>
                     </td>
@@ -665,6 +685,26 @@
                     }
                     // The 'state' is no longer sent from the frontend.
                     handleItemSave([{ productBase: base, quantity: 0 }]);
+                });
+            });
+
+            // --- Approve Button (works for both views) ---
+            tbody.querySelectorAll('.approve-button').forEach(button => {
+                button.addEventListener('click', function() {
+                    const base = this.dataset.base;
+                    const estimated = this.dataset.estimated;
+                    const input = this.closest('tr').querySelector('.real-stock-input');
+
+                    if (input) {
+                        input.value = estimated;
+                        // Mark as dirty to ensure save is triggered if needed, though we save immediately.
+                        input.dataset.isDirty = 'true';
+                    }
+
+                    const quantity = parseFloat(estimated);
+                    if (!isNaN(quantity)) {
+                        handleItemSave([{ productBase: base, quantity: quantity }]);
+                    }
                 });
             });
         }
