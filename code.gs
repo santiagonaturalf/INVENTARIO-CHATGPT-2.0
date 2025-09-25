@@ -42,12 +42,12 @@ const norm = s => (s ?? '').toString().trim().toLowerCase();
 function onOpen() {
   SpreadsheetApp.getUi()
       .createMenu('Inventario 2.0')
-      .addItem('INICIAR DIA', 'calcularInventarioDiario')
-      .addItem('CERRAR DIA', 'cerrarDia')
+      .addItem('☀️ INICIAR DIA', 'calcularInventarioDiario')
+      .addItem('🌙 CERRAR DIA', 'cerrarDia')
       .addSeparator()
-      .addItem('Abrir Dashboard de Inventario', 'showDashboard')
+      .addItem('📊 Abrir Dashboard de Inventario', 'showDashboard')
       .addSeparator()
-      .addItem('Contactar Cliente (dashboard)', 'openContactarCliente')
+      .addItem('💬 Contactar Cliente (dashboard)', 'openContactarCliente')
       .addToUi();
 }
 
