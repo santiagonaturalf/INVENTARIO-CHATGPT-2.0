@@ -654,7 +654,8 @@ function getEstadosProductos_() {
   const rows = sh.getRange(2,1, sh.getLastRow()-1, 5).getValues();
   const map = new Map();
   rows.forEach(([base, estado]) => {
-    if (base) map.set(base, (estado || 'pendiente').toString().toLowerCase());
+    // Usar el nombre normalizado como clave para que no haya distinción de mayúsculas/minúsculas
+    if (base) map.set(norm(base), (estado || 'pendiente').toString().toLowerCase());
   });
   return map;
 }
@@ -675,6 +676,7 @@ function getEstadosParaUI() {
  */
 function setEstadoProducto(baseProduct, estado, notas) {
   if (!baseProduct) throw new Error('Producto Base vacío.');
+  const baseProductNorm = norm(baseProduct);
   estado = (estado || 'pendiente').toLowerCase();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sh = ss.getSheetByName('Estados') || ss.insertSheet('Estados');
@@ -689,7 +691,7 @@ function setEstadoProducto(baseProduct, estado, notas) {
   if (lastRow >= 2) {
     const data = sh.getRange(2,1,lastRow-1,5).getValues();
     for (let i=0;i<data.length;i++){
-      if ((data[i][0]||'').toString().trim().toLowerCase() === baseProduct.toString().trim().toLowerCase()){
+      if (norm(data[i][0]) === baseProductNorm){
         sh.getRange(i+2,2).setValue(estado);
         if (notas !== undefined) sh.getRange(i+2,3).setValue(notas);
         sh.getRange(i+2,4).setValue(Session.getActiveUser().getEmail() || 'Sistema');
@@ -701,7 +703,7 @@ function setEstadoProducto(baseProduct, estado, notas) {
 
   // Insertar nueva fila
   sh.appendRow([
-    baseProduct,
+    baseProduct, // Guardar el nombre original
     estado,
     notas || '',
     Session.getActiveUser().getEmail() || 'Sistema',
@@ -1150,17 +1152,18 @@ function getDashboardData() {
     }
   });
 
-  // === 2) Leer datos del "Reporte Hoy" y crear un mapa
-  const reporteData = reporteSheet.getRange(2, 1, reporteSheet.getLastRow() - 1, 5).getValues();
+  // === 2) Leer datos del "Reporte Hoy" y crear un mapa (incluyendo Stock Real)
+  const reporteData = reporteSheet.getRange(2, 1, reporteSheet.getLastRow() - 1, 6).getValues(); // Leer hasta la columna F
   const reporteMap = new Map();
   reporteData.forEach(row => {
-    const [productoBase, invAyer, compras, ventas, invEstimado] = row;
+    const [productoBase, invAyer, compras, ventas, invEstimado, stockReal] = row;
     if (productoBase) {
       reporteMap.set(norm(productoBase), {
         lastInventory: parseFloat(String(invAyer || '0').replace(',', '.')) || 0,
         purchases: parseFloat(String(compras || '0').replace(',', '.')) || 0,
         sales: parseFloat(String(ventas || '0').replace(',', '.')) || 0,
         expectedStock: parseFloat(String(invEstimado || '0').replace(',', '.')) || 0,
+        stockReal: stockReal // Guardar el valor de Stock Real
       });
     }
   });
@@ -1184,7 +1187,7 @@ function getDashboardData() {
     });
   });
 
-  // === 4) Lógica de estados (se mantiene, pero necesita lastInvMap)
+  // === 4) Lógica de estados (modificada)
   const lastInvMap = new Map();
   if (histSheet && histSheet.getLastRow() > 1) {
     const histData = histSheet.getRange(2, 1, histSheet.getLastRow() - 1, 4).getValues();
@@ -1212,22 +1215,32 @@ function getDashboardData() {
   today.setHours(0, 0, 0, 0);
 
   baseInfoMap.forEach((info, baseNorm) => {
-    const persistedState = persistedStates[info.original] || 'pendiente';
-    if (persistedState === 'aprobado') {
-      const lastInv = lastInvMap.get(baseNorm);
-      if (lastInv && lastInv.ts) {
-        const lastInvDate = new Date(lastInv.ts);
-        lastInvDate.setHours(0, 0, 0, 0);
-        if (lastInvDate.getTime() < today.getTime()) {
-          adjustedStates[info.original] = 'pendiente';
-        } else {
-          adjustedStates[info.original] = 'aprobado';
-        }
-      } else {
-        adjustedStates[info.original] = 'pendiente';
-      }
+    const reporteInfo = reporteMap.get(baseNorm);
+    const stockRealValue = reporteInfo ? reporteInfo.stockReal : null;
+
+    // **NUEVA REGLA**: Si hay un valor en "Stock Real", el estado es "aprobado".
+    if (stockRealValue !== null && stockRealValue !== '') {
+        adjustedStates[info.original] = 'aprobado';
     } else {
-      adjustedStates[info.original] = persistedState;
+        // Lógica anterior si "Stock Real" está vacío.
+        // La clave para `persistedStates` ahora debe ser normalizada.
+        const persistedState = persistedStates[baseNorm] || 'pendiente';
+        if (persistedState === 'aprobado') {
+            const lastInv = lastInvMap.get(baseNorm);
+            if (lastInv && lastInv.ts) {
+                const lastInvDate = new Date(lastInv.ts);
+                lastInvDate.setHours(0, 0, 0, 0);
+                if (lastInvDate.getTime() < today.getTime()) {
+                    adjustedStates[info.original] = 'pendiente';
+                } else {
+                    adjustedStates[info.original] = 'aprobado';
+                }
+            } else {
+                adjustedStates[info.original] = 'pendiente';
+            }
+        } else {
+            adjustedStates[info.original] = persistedState;
+        }
     }
   });
 
@@ -1256,9 +1269,9 @@ function saveStockUpdates(updates) {
     const histData = hojaHistorico.getDataRange().getValues();
     const skuData = hojaSku.getRange(2, 1, hojaSku.getLastRow() - 1, 8).getValues();
 
-    // Create maps for quick lookups
-    const reporteMap = new Map(reporteData.map((row, i) => [row[0], { row: row, rowIndex: i + 1 }]));
-    const skuUnitMap = new Map(skuData.map(row => [row[1], row[7]]));
+    // Create maps for quick lookups using normalized keys
+    const reporteMap = new Map(reporteData.map((row, i) => [norm(row[0]), { row: row, rowIndex: i + 1 }]));
+    const skuUnitMap = new Map(skuData.map(row => [norm(row[1]), row[7]]));
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -1271,8 +1284,11 @@ function saveStockUpdates(updates) {
     const histMap = new Map();
     for (let i = 1; i < histData.length; i++) {
         const base = histData[i][1];
-        if (!histMap.has(base)) histMap.set(base, []);
-        histMap.get(base).push({ rowIndex: i + 1, timestamp: new Date(histData[i][0]) });
+        if (base) {
+          const baseNorm = norm(base);
+          if (!histMap.has(baseNorm)) histMap.set(baseNorm, []);
+          histMap.get(baseNorm).push({ rowIndex: i + 1, timestamp: new Date(histData[i][0]) });
+        }
     }
     histMap.forEach(entries => entries.sort((a, b) => a.timestamp - b.timestamp));
 
@@ -1280,6 +1296,7 @@ function saveStockUpdates(updates) {
 
     updates.forEach(update => {
       let { productBase, quantity, state } = update;
+      const productBaseNorm = norm(productBase);
 
       try {
         // Clamp quantity to 0 on the backend as a safeguard
@@ -1287,13 +1304,13 @@ function saveStockUpdates(updates) {
           quantity = 0;
         }
 
-        // 1. Set product state
+        // 1. Set product state (setEstadoProducto now handles normalization)
         if (state) {
           setEstadoProducto(productBase, state, 'Actualizado desde dashboard');
         }
 
         // 2. Update Reporte Hoy & log discrepancy
-        const reporteInfo = reporteMap.get(productBase);
+        const reporteInfo = reporteMap.get(productBaseNorm);
         if (!reporteInfo) throw new Error(`Producto no encontrado en 'Reporte Hoy'.`);
 
         hojaReporte.getRange(reporteInfo.rowIndex, 6).setValue(quantity); // Col F is Stock Real
@@ -1303,7 +1320,7 @@ function saveStockUpdates(updates) {
         }
 
         // 3. Update Inventario Histórico
-        const productEntries = histMap.get(productBase) || [];
+        const productEntries = histMap.get(productBaseNorm) || [];
         const sameDayEntry = productEntries.find(entry => {
             const entryDate = new Date(entry.timestamp);
             entryDate.setHours(0, 0, 0, 0);
@@ -1316,7 +1333,7 @@ function saveStockUpdates(updates) {
           if (productEntries.length >= 5) {
             rowsToDelete.add(productEntries[0].rowIndex);
           }
-          const unit = skuUnitMap.get(productBase) || '';
+          const unit = skuUnitMap.get(productBaseNorm) || '';
           hojaHistorico.appendRow([new Date(), productBase, quantity, unit]);
         }
 
