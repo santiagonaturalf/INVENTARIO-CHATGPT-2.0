@@ -164,24 +164,6 @@
             background-color: #d98e1a;
         }
 
-        .approve-button {
-            background-color: #28a745; /* Green */
-            color: white;
-            border: none;
-            border-radius: 50%;
-            width: 28px;
-            height: 28px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            padding: 0;
-            line-height: 28px;
-            flex-shrink: 0;
-        }
-        .approve-button:hover {
-            background-color: #218838;
-        }
-
         .stock-input-wrapper {
             display: flex;
             align-items: center;
@@ -190,7 +172,6 @@
 
         .low-stock { background-color: #FFF0F0; }
         .negative-stock { background-color: #FFDADA; font-weight: bold; }
-        .row-saved { background-color: #E6FFED !important; } /* Green for saved rows */
         .error-row { background-color: #ffe5e5 !important; }
         .error-row:hover { background-color: #ffdddd !important; }
         .badge { padding:2px 6px; border-radius:10px; font-size:12px; }
@@ -466,8 +447,7 @@
                     </td>
                     <td>
                         <div class="stock-input-wrapper">
-                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock||0).toFixed(2)}"/>
-                            <button class="approve-button" data-base="${item.baseProduct}" data-estimated="${Number(item.expectedStock||0).toFixed(2)}" title="Aprobar Stock Estimado">&#x2713;</button>
+                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/>
                             <button class="zero-out-button" data-base="${item.baseProduct}" title="Poner en Cero y Aprobar">0</button>
                         </div>
                     </td>
@@ -527,8 +507,7 @@
                     </td>
                     <td>
                         <div class="stock-input-wrapper">
-                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock||0).toFixed(2)}"/>
-                            <button class="approve-button" data-base="${item.baseProduct}" data-estimated="${Number(item.expectedStock||0).toFixed(2)}" title="Aprobar Stock Estimado">&#x2713;</button>
+                            <input type="number" step="0.01" class="real-stock-input" data-base="${item.baseProduct}" value="${Number(item.expectedStock).toFixed(2)}"/>
                             <button class="zero-out-button" data-base="${item.baseProduct}" title="Poner en Cero y Aprobar">0</button>
                         </div>
                     </td>
@@ -545,15 +524,9 @@
                 .withSuccessHandler(response => {
                     setLoadingState(false);
                     if (response.success && response.updatedProducts) {
-                        // Update local state and apply visual feedback.
+                        // Update local state from the response for data consistency,
+                        // even though we are not re-rendering immediately.
                         response.updatedProducts.forEach(updatedProd => {
-                            // Find the table row and apply the saved style.
-                            const row = document.querySelector(`tr[data-product-base="${updatedProd.productBase}"]`);
-                            if (row) {
-                                row.classList.add('row-saved');
-                            }
-
-                            // Update local state for data consistency.
                             if (updatedProd.state) {
                                 estadosMap[updatedProd.productBase] = updatedProd.state;
                             }
@@ -685,26 +658,6 @@
                     }
                     // The 'state' is no longer sent from the frontend.
                     handleItemSave([{ productBase: base, quantity: 0 }]);
-                });
-            });
-
-            // --- Approve Button (works for both views) ---
-            tbody.querySelectorAll('.approve-button').forEach(button => {
-                button.addEventListener('click', function() {
-                    const base = this.dataset.base;
-                    const estimated = this.dataset.estimated;
-                    const input = this.closest('tr').querySelector('.real-stock-input');
-
-                    if (input) {
-                        input.value = estimated;
-                        // Mark as dirty to ensure save is triggered if needed, though we save immediately.
-                        input.dataset.isDirty = 'true';
-                    }
-
-                    const quantity = parseFloat(estimated);
-                    if (!isNaN(quantity)) {
-                        handleItemSave([{ productBase: base, quantity: quantity }]);
-                    }
                 });
             });
         }
