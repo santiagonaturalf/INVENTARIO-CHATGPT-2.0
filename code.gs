@@ -42,6 +42,8 @@ const norm = s => (s ?? '').toString().trim().toLowerCase();
 function onOpen() {
   SpreadsheetApp.getUi()
       .createMenu('Inventario 2.0')
+      .addItem('INICIAR DIA', 'calcularInventarioDiario')
+      .addSeparator()
       .addItem('Abrir Dashboard de Inventario', 'showDashboard')
       .addSeparator()
       .addItem('Contactar Cliente (dashboard)', 'openContactarCliente')
@@ -168,22 +170,21 @@ function calcularInventarioDiario() {
 
     // Obtener datos de las hojas, omitiendo encabezados (fila 1)
     const datosSku = hojaSku.getRange("A2:K" + hojaSku.getLastRow()).getValues();
-    const datosOrders = hojaOrders.getRange("A2:K" + hojaOrders.getLastRow()).getValues();
+    // Se lee hasta la columna Z para obtener el "Producto Base"
+    const datosOrders = hojaOrders.getRange("A2:Z" + hojaOrders.getLastRow()).getValues();
     const datosAdquisiciones = hojaAdquisiciones.getRange("A2:M" + hojaAdquisiciones.getLastRow()).getValues();
     const datosHistorico = hojaHistorico.getLastRow() > 1 ? hojaHistorico.getRange("A2:E" + hojaHistorico.getLastRow()).getValues() : [];
 
     // --- 2. PREPARAR MAPAS DE BÚSQUEDA (Lookups) ---
-    const mapaVentaSku = new Map(); // Key: Nombre Producto, Value: { productoBase, cantVenta, unidadVenta }
+    // El mapa de ventas ahora solo necesita el factor de conversión desde SKU.
+    const mapaVentaSku = new Map(); // Key: Nombre Producto, Value: cantVenta (factor)
     const mapaCompraSku = new Map(); // Key: 'Producto Base-Formato Adquisición', Value: cantAdquisicion
 
     datosSku.forEach(fila => {
-      const [nombreProducto, productoBase, formatoAdq, cantAdq, , , cantVenta, unidadVenta] = fila;
+      const [nombreProducto, productoBase, formatoAdq, cantAdq, , , cantVenta] = fila;
       if (nombreProducto) {
-        mapaVentaSku.set(norm(nombreProducto), {
-          productoBase: productoBase,
-          cantVenta: parseFloat(cantVenta) || 0,
-          unidadVenta: unidadVenta
-        });
+        // Key: Nombre Producto (normalizado), Value: Cantidad Venta (factor de conversión)
+        mapaVentaSku.set(norm(nombreProducto), parseFloat(String(cantVenta).replace(',','.')) || 0);
       }
       if (productoBase && formatoAdq) {
         const claveCompra = `${norm(productoBase)}-${formatoAdq.toString().trim()}`;
@@ -199,13 +200,24 @@ function calcularInventarioDiario() {
     datosOrders.forEach(fila => {
       const fechaPedido = new Date(fila[8]); // Columna I: Fecha
       if (fechaPedido >= hoy) {
-        const nombreProductoVendido = fila[9]; // Columna J: Nombre Producto
-        const cantidadVendida = parseFloat(String(fila[10]).replace(',','.')) || 0; // Columna K: Cantidad
+        const cantidadRaw = String(fila[10]); // Columna K: Cantidad (raw)
+        // Si la cantidad contiene 'E', es un item eliminado y se debe omitir.
+        if (cantidadRaw.toUpperCase().includes('E')) {
+          return;
+        }
 
-        const skuInfo = mapaVentaSku.get(nombreProductoVendido);
-        if (skuInfo) {
-          const ventaEnUnidadBase = cantidadVendida * skuInfo.cantVenta;
-          sumarAObjeto(ventasDelDia, norm(skuInfo.productoBase), ventaEnUnidadBase);
+        const nombreProductoVendido = fila[9]; // Columna J: Nombre Producto
+        const cantidadVendida = parseFloat(cantidadRaw.replace(',','.')) || 0;
+        const productoBase = fila[25]; // Columna Z: Producto Base
+
+        // Si no hay producto base en la fila, no se puede procesar.
+        if (!productoBase) return;
+
+        const factorConversion = mapaVentaSku.get(norm(nombreProductoVendido));
+
+        if (factorConversion !== undefined) {
+          const ventaEnUnidadBase = cantidadVendida * factorConversion;
+          sumarAObjeto(ventasDelDia, norm(productoBase), ventaEnUnidadBase);
         }
       }
     });
@@ -254,7 +266,7 @@ function calcularInventarioDiario() {
     }
 
     // --- 6. CALCULAR INVENTARIO DE HOY Y PREPARAR REPORTE ---
-    const todosLosProductos = new Set([...Object.keys(inventarioAyer), ...Object.keys(comprasDelDia), ...Object.keys(ventasDelDia)]);
+    const todosLosProductos = new Set(datosSku.map(row => row[1]).filter(Boolean).map(norm));
     const reporteHoy = [];
     const nuevoHistorico = [];
     const timestamp = new Date();
@@ -742,6 +754,7 @@ const CFG = {
     fecha: 'Fecha',
     nombreProducto: 'Nombre Producto',
     cantidad: 'Cantidad',
+    productoBase: 'Producto Base', // Se añade para leer la columna Z de Orders
   },
   SKU_HEADERS: {
     nombreProducto: 'Nombre Producto',
@@ -776,6 +789,11 @@ function startOfTomorrow_(tz) {
 }
 
 /***** CORE *****/
+/**
+ * Construye un mapa desde la hoja SKU.
+ * La clave es el "Nombre Producto" y el valor contiene el factor de conversión y la unidad.
+ * El "Producto Base" ya no se necesita en el mapa porque se lee directamente de la hoja Orders.
+ */
 function buildSkuMap_() {
   const sh = SpreadsheetApp.getActive().getSheetByName(CFG.sheetSKU);
   if (!sh) throw new Error(`No existe la hoja ${CFG.sheetSKU}`);
@@ -798,7 +816,7 @@ function buildSkuMap_() {
     if (map[name]) warnings.push(`Duplicado en SKU: ${row[H.nombreProducto]}`);
 
     map[name] = {
-      base: base.toString().trim(),
+      // "base" ya no es necesario aquí, se leerá de la hoja Orders.
       factor: Number(fac) || 0,
       unidad: uni
     };
@@ -808,6 +826,10 @@ function buildSkuMap_() {
   return map;
 }
 
+/**
+ * Calcula las ventas por "Producto Base" para un rango de fechas y estados de pedido.
+ * La lógica ahora toma el "Producto Base" directamente de la hoja "Orders" (columna Z).
+ */
 function getVentasPorBase_EntreFechas_(fromDate, toDate, estadosPermitidos) {
   const skuMap = buildSkuMap_();
 
@@ -836,9 +858,16 @@ function getVentasPorBase_EntreFechas_(fromDate, toDate, estadosPermitidos) {
     if (!(fecha instanceof Date) || isNaN(fecha)) continue;
     if (!(fecha >= fromDate && fecha < toDate)) continue;
 
+    const cantidadRaw = String(row[H.cantidad]);
+    // Si la cantidad contiene 'E', es un item eliminado y se debe omitir.
+    if (cantidadRaw.toUpperCase().includes('E')) {
+      continue;
+    }
     const nombre = norm(row[H.nombreProducto]);
-    const cantidad = Number(row[H.cantidad]) || 0;
-    if (!nombre || cantidad <= 0) continue;
+    const cantidad = Number(cantidadRaw.replace(',', '.')) || 0;
+    const productoBase = row[H.productoBase]; // Se obtiene el "Producto Base" de la columna Z.
+
+    if (!nombre || cantidad <= 0 || !productoBase) continue;
 
     const s = skuMap[nombre];
     if (!s) { missing.push(row[H.nombreProducto]); continue; }
@@ -852,7 +881,7 @@ function getVentasPorBase_EntreFechas_(fromDate, toDate, estadosPermitidos) {
     }
 
     const kg = cantidad * (Number(s.factor) || 0) * mult;
-    const baseKey = norm(s.base);
+    const baseKey = norm(productoBase); // Se usa el "Producto Base" de la orden.
     if (!ventasPorBase[baseKey]) ventasPorBase[baseKey] = 0;
     ventasPorBase[baseKey] += kg;
   }
