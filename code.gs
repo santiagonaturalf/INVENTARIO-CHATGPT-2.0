@@ -981,45 +981,69 @@ function getComprasPorBase_SUMARSI_(adqSheet) {
  * @returns {Map<string, number>} comprasPorBase
  */
 function getComprasPorBase_Correcto(adqSheet, skuSheet) {
-  const comprasPorBase = new Map();
-  if (!adqSheet || adqSheet.getLastRow() < 2 || !skuSheet || skuSheet.getLastRow() < 2) {
+    const comprasPorBase = new Map();
+    if (!adqSheet || adqSheet.getLastRow() < 2 || !skuSheet || skuSheet.getLastRow() < 2) {
+        return comprasPorBase;
+    }
+
+    // 1. Crear mapa de búsqueda desde SKU
+    const mapaCompraSku = new Map();
+    const skuValues = skuSheet.getRange(2, 1, skuSheet.getLastRow() - 1, 4).getValues(); // A:D
+    skuValues.forEach(fila => {
+        const [, productoBase, formatoAdq, cantAdq] = fila; // B, C, D
+        if (productoBase && formatoAdq) {
+            const pBase = norm(productoBase);
+            const fAdq = formatoAdq.toString().trim();
+            mapaCompraSku.set(`${pBase}-${fAdq}`, parseFloat(String(cantAdq).replace(',','.')) || 0);
+        }
+    });
+
+    // 2. Procesar adquisiciones con filtro de fecha
+    const adqData = adqSheet.getDataRange().getValues();
+    const adqHeaders = adqData[0].map(h => norm(h));
+    const idxFecha = adqHeaders.indexOf('fecha');
+    const idxProductoBase = adqHeaders.indexOf('producto base');
+    const idxFormatoCompra = adqHeaders.indexOf('formato de compra');
+    const idxCantidad = adqHeaders.indexOf('cantidad a comprar');
+
+    if (idxProductoBase === -1 || idxFormatoCompra === -1 || idxCantidad === -1) {
+        Logger.log("ADVERTENCIA: Faltan columnas esenciales en 'Adquisiciones'. Se requieren 'Producto Base', 'Formato de Compra' y 'Cantidad a Comprar'.");
+        return comprasPorBase;
+    }
+
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    for (let i = 1; i < adqData.length; i++) {
+        const row = adqData[i];
+        const fechaAdqRaw = idxFecha !== -1 ? row[idxFecha] : null;
+
+        if (fechaAdqRaw) {
+            const fechaAdq = new Date(fechaAdqRaw);
+            if (fechaAdq.getTime() < hoy.getTime()) {
+                continue; // Omitir si es de un día anterior
+            }
+        }
+
+        const productoBase = row[idxProductoBase];
+        const formatoCompra = row[idxFormatoCompra];
+        const cantidadCompradaStr = row[idxCantidad];
+
+        if (!productoBase || !formatoCompra) continue;
+
+        const pBase = norm(productoBase);
+        const cantidadComprada = parseFloat(String(cantidadCompradaStr).replace(',','.')) || 0;
+        const formatoAdq = _getFormatoAdquisicionBase(formatoCompra);
+        const claveCompra = `${pBase}-${formatoAdq}`;
+        const cantAdquisicion = mapaCompraSku.get(claveCompra);
+
+        if (cantAdquisicion) {
+            const compraEnUnidadBase = cantidadComprada * cantAdquisicion;
+            comprasPorBase.set(pBase, (comprasPorBase.get(pBase) || 0) + compraEnUnidadBase);
+        }
+    }
+
     return comprasPorBase;
-  }
-
-  // 1. Crear mapa de búsqueda desde SKU
-  const mapaCompraSku = new Map();
-  const skuValues = skuSheet.getRange(2, 1, skuSheet.getLastRow() - 1, 4).getValues(); // A:D
-  skuValues.forEach(fila => {
-    const [, productoBase, formatoAdq, cantAdq] = fila; // B, C, D
-    if (productoBase && formatoAdq) {
-      const pBase = norm(productoBase);
-      const fAdq = formatoAdq.toString().trim();
-      mapaCompraSku.set(`${pBase}-${fAdq}`, parseFloat(String(cantAdq).replace(',','.')) || 0);
-    }
-  });
-
-  // 2. Procesar adquisiciones
-  const adqValues = adqSheet.getRange(2, 1, adqSheet.getLastRow() - 1, 4).getValues(); // A:D
-  adqValues.forEach(fila => {
-    const [, productoBase, formatoCompra, cantidadCompradaStr] = fila; // B, C, D
-    if (!productoBase || !formatoCompra) return;
-
-    const pBase = norm(productoBase);
-    const cantidadComprada = parseFloat(String(cantidadCompradaStr).replace(',','.')) || 0;
-
-    // Extraer el formato base. Ej: "Paquete" de "Paquete (4 Kg)"
-    const formatoAdq = _getFormatoAdquisicionBase(formatoCompra);
-
-    const claveCompra = `${pBase}-${formatoAdq}`;
-    const cantAdquisicion = mapaCompraSku.get(claveCompra);
-
-    if (cantAdquisicion) {
-      const compraEnUnidadBase = cantidadComprada * cantAdquisicion;
-      comprasPorBase.set(pBase, (comprasPorBase.get(pBase) || 0) + compraEnUnidadBase);
-    }
-  });
-
-  return comprasPorBase;
 }
 
 function getDashboardData() {
@@ -1081,31 +1105,9 @@ function getDashboardData() {
     });
   }
 
-  // === 3) Ventas del día (lógica simple solicitada por el usuario)
-  const ventasPorBase = new Map();
-  const ordersData = ordersSheet.getDataRange().getValues();
-  const ordersHeaders = ordersData[0]; // No normalizar, buscar por nombre exacto
-
-  // Según el usuario: Cantidad es Col K, Producto Base es Col Z.
-  // Los índices en un array basado en 0 son 10 y 25.
-  const idxCantidad = 10; // Columna K
-  const idxProductoBase = 25; // Columna Z
-
-  // Verificación de seguridad por si las columnas cambian
-  if (ordersHeaders[idxCantidad] !== 'Cantidad' || ordersHeaders[idxProductoBase] !== 'Producto Base') {
-    Logger.log(`ADVERTENCIA: La estructura de columnas en 'Orders' puede haber cambiado. Se esperaba 'Cantidad' en K y 'Producto Base' en Z.`);
-  }
-
-  for (let i = 1; i < ordersData.length; i++) {
-    const row = ordersData[i];
-    const productoBase = row[idxProductoBase];
-    const cantidad = parseFloat(row[idxCantidad]);
-
-    if (productoBase && !isNaN(cantidad) && cantidad > 0) {
-      const key = norm(productoBase);
-      ventasPorBase.set(key, (ventasPorBase.get(key) || 0) + cantidad);
-    }
-  }
+  // === 3) Ventas del día (lógica corregida)
+  const ventasHoyObj = getVentasPorBaseHoy_JSON(); // Llama a la función correcta
+  const ventasPorBase = new Map(Object.entries(ventasHoyObj)); // Convierte el objeto a un Map
 
   // === 4) Compras hoy (Cálculo correcto basado en Adquisiciones y SKU)
   const comprasPorBase = getComprasPorBase_Correcto(adqSheet, skuSheet);
