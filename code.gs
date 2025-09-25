@@ -1239,63 +1239,86 @@ function saveStockUpdates(updates) {
     const hojaDiscrepancias = ss.getSheetByName("Discrepancias");
     const hojaHistorico = ss.getSheetByName(HOJA_HISTORICO);
     const hojaSku = ss.getSheetByName(HOJA_SKU);
+    const hojaEstados = ss.getSheetByName('Estados');
 
-    // Get all data once for efficiency
-    const reporteData = hojaReporte.getDataRange().getValues();
-    const histData = hojaHistorico.getDataRange().getValues();
+    // === 1. READ ALL DATA (IN-MEMORY) ===
+    const reporteRange = hojaReporte.getDataRange();
+    const reporteData = reporteRange.getValues();
+
+    const histRange = hojaHistorico.getDataRange();
+    const histData = histRange.getValues();
+
     const skuData = hojaSku.getRange(2, 1, hojaSku.getLastRow() - 1, 8).getValues();
 
-    // Create maps for quick lookups using normalized keys
-    const reporteMap = new Map(reporteData.map((row, i) => [norm(row[0]), { row: row, rowIndex: i + 1 }]));
+    const estadosRange = hojaEstados.getDataRange();
+    const estadosData = hojaEstados.getLastRow() > 0 ? estadosRange.getValues() : [['Producto Base','Estado','Notas','Usuario','Timestamp']];
+
+    // === 2. CREATE LOOKUP MAPS (map to 0-based array index) ===
+    const reporteMap = new Map(reporteData.map((row, i) => [norm(row[0]), { rowIndex: i }]));
     const skuUnitMap = new Map(skuData.map(row => [norm(row[1]), row[7]]));
+    const estadosMap = new Map(estadosData.map((row, i) => [norm(row[0]), { rowIndex: i }]));
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const userEmail = Session.getActiveUser().getEmail() || 'Sistema';
 
-    let successCount = 0;
+    // === 3. PREPARE BATCH-ADD ARRAYS ===
+    const discrepanciasNuevas = [];
+    const historicoNuevas = [];
+    const updatedProducts = [];
     const errors = [];
-    const updatedProducts = []; // Array to hold the data for the frontend
 
-    // Sort historical data once to find oldest records later
+    // Map historical data for deletion logic
     const histMap = new Map();
-    for (let i = 1; i < histData.length; i++) {
+    for (let i = 1; i < histData.length; i++) { // Skip header
         const base = histData[i][1];
         if (base) {
           const baseNorm = norm(base);
           if (!histMap.has(baseNorm)) histMap.set(baseNorm, []);
-          histMap.get(baseNorm).push({ rowIndex: i + 1, timestamp: new Date(histData[i][0]) });
+          histMap.get(baseNorm).push({ rowIndex: i, timestamp: new Date(histData[i][0]) }); // Store 0-based index
         }
     }
     histMap.forEach(entries => entries.sort((a, b) => a.timestamp - b.timestamp));
-
     const rowsToDelete = new Set();
 
+
+    // === 4. PROCESS UPDATES IN-MEMORY ===
     updates.forEach(update => {
       let { productBase, quantity, state } = update;
       const productBaseNorm = norm(productBase);
 
       try {
-        // Clamp quantity to 0 on the backend as a safeguard
-        if (quantity !== null && quantity < 0) {
-          quantity = 0;
-        }
+        if (quantity !== null && quantity < 0) quantity = 0;
 
-        // 1. Set product state (setEstadoProducto now handles normalization)
+        // --- a. Estado ---
         if (state) {
-          setEstadoProducto(productBase, state, 'Actualizado desde dashboard');
+            const estadoInfo = estadosMap.get(productBaseNorm);
+            const timestamp = new Date();
+            if (estadoInfo) { // Update existing estado in the array
+                const rowIndex = estadoInfo.rowIndex;
+                estadosData[rowIndex][1] = state; // Estado
+                estadosData[rowIndex][3] = userEmail; // Usuario
+                estadosData[rowIndex][4] = timestamp; // Timestamp
+            } else { // Add new estado to the array
+                const newRow = [productBase, state, 'Actualizado desde dashboard', userEmail, timestamp];
+                estadosData.push(newRow);
+                estadosMap.set(productBaseNorm, { rowIndex: estadosData.length - 1 }); // Update map for future updates in same batch
+            }
         }
 
-        // 2. Update Reporte Hoy & log discrepancy
+        // --- b. Reporte Hoy & Discrepancia ---
         const reporteInfo = reporteMap.get(productBaseNorm);
         if (!reporteInfo) throw new Error(`Producto no encontrado en 'Reporte Hoy'.`);
 
-        hojaReporte.getRange(reporteInfo.rowIndex, 6).setValue(quantity); // Col F is Stock Real
-        const inventarioEstimado = parseFloat(reporteInfo.row[4]);
+        const rowIndexReporte = reporteInfo.rowIndex;
+        reporteData[rowIndexReporte][5] = quantity; // Col F (index 5) is Stock Real
+
         if (hojaDiscrepancias) {
-          hojaDiscrepancias.appendRow([new Date(), productBase, inventarioEstimado, quantity, quantity - inventarioEstimado]);
+            const inventarioEstimado = parseFloat(reporteData[rowIndexReporte][4]);
+            discrepanciasNuevas.push([new Date(), productBase, inventarioEstimado, quantity, quantity - inventarioEstimado]);
         }
 
-        // 3. Update Inventario Histórico
+        // --- c. Histórico ---
         const productEntries = histMap.get(productBaseNorm) || [];
         const sameDayEntry = productEntries.find(entry => {
             const entryDate = new Date(entry.timestamp);
@@ -1304,38 +1327,57 @@ function saveStockUpdates(updates) {
         });
 
         if (sameDayEntry) {
-          hojaHistorico.getRange(sameDayEntry.rowIndex, 3).setValue(quantity); // Col C is Stock Real
+            histData[sameDayEntry.rowIndex][2] = quantity; // Col C (index 2) is Stock Real
         } else {
-          if (productEntries.length >= 5) {
-            rowsToDelete.add(productEntries[0].rowIndex);
-          }
-          const unit = skuUnitMap.get(productBaseNorm) || '';
-          hojaHistorico.appendRow([new Date(), productBase, quantity, unit]);
+            if (productEntries.length >= 5) {
+                // Mark the actual row index (1-based) for deletion
+                rowsToDelete.add(productEntries[0].rowIndex + 1);
+            }
+            const unit = skuUnitMap.get(productBaseNorm) || '';
+            historicoNuevas.push([new Date(), productBase, quantity, unit]);
         }
 
-        // Add to the list of products to return to the frontend
-        updatedProducts.push({
-            productBase: productBase,
-            quantity: quantity,
-            state: state
-        });
+        // --- d. Frontend response ---
+        updatedProducts.push({ productBase, quantity, state });
 
-        successCount++;
       } catch (e) {
         errors.push(`Error con ${productBase}: ${e.message}`);
       }
-    });
-
-    // Delete rows in reverse order to avoid index shifts
-    Array.from(rowsToDelete).sort((a, b) => b - a).forEach(rowIndex => {
-      hojaHistorico.deleteRow(rowIndex);
     });
 
     if (errors.length > 0) {
       throw new Error(errors.join('; '));
     }
 
-    return { success: true, message: `${successCount} productos actualizados.`, updatedProducts: updatedProducts };
+    // === 5. EXECUTE BATCH WRITES ===
+
+    // Write back entire modified sheets
+    reporteRange.setValues(reporteData);
+    histRange.setValues(histData);
+
+    // For 'Estados', clear and rewrite to handle size changes
+    if (hojaEstados.getLastRow() > 0) {
+      hojaEstados.getRange(1, 1, hojaEstados.getLastRow(), hojaEstados.getLastColumn()).clearContent();
+    }
+    if (estadosData.length > 0) {
+      hojaEstados.getRange(1, 1, estadosData.length, estadosData[0].length).setValues(estadosData);
+      hojaEstados.getRange(1, 1, 1, estadosData[0].length).setFontWeight('bold');
+    }
+
+    // Append new rows
+    if (discrepanciasNuevas.length > 0) {
+      hojaDiscrepancias.getRange(hojaDiscrepancias.getLastRow() + 1, 1, discrepanciasNuevas.length, discrepanciasNuevas[0].length).setValues(discrepanciasNuevas);
+    }
+    if (historicoNuevas.length > 0) {
+        hojaHistorico.getRange(hojaHistorico.getLastRow() + 1, 1, historicoNuevas.length, historicoNuevas[0].length).setValues(historicoNuevas);
+    }
+
+    // Delete rows in reverse order to avoid index shifts
+    Array.from(rowsToDelete).sort((a, b) => b - a).forEach(rowIndex => {
+      hojaHistorico.deleteRow(rowIndex);
+    });
+
+    return { success: true, message: `${updatedProducts.length} productos actualizados.`, updatedProducts: updatedProducts };
   } catch (e) {
     Logger.log(e.stack);
     return { success: false, error: e.message };
